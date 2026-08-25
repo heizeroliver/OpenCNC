@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+onlyBuiltDependencies:
+  - esbuild
+confirmModulesPurge: false
+allowBuilds:
+  esbuild: true

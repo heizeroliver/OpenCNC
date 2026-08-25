@@ -1,0 +1,8 @@
+; Synthetic fixture — not derived from vendor production data
+[HEADER]
+L=800
+H=400
+T=18
+[PROGRAM]
+UNKNOWN_TEST_RECORD
+
