@@ -1,16 +1,16 @@
 # Roadmap
 
-## Phase 0 — repository foundation (current)
+## Phase 0 — repository foundation (complete)
 
 - Versioned vendor-neutral intermediate representation
 - Conservative BPP and CIX reader scaffolds
 - Basic geometry validation and SVG rendering
 - CLI and synthetic tests
 
-## Phase 1 — real-world format discovery
+## Phase 1 — real-world format discovery (current)
 
-- Test against permission-cleared BPP and CIX samples
-- Map panels, drilling, grooves, contours, and repetitions
+- Continue testing against permission-cleared BPP and CIX samples
+- Expand beyond the currently mapped panels, drilling, repetitions, and routed lines
 - Document dialect and version differences
 - Expand diagnostics and regression fixtures
 
@@ -27,4 +27,3 @@
 - Stable library API and package releases
 
 Machine-control and G-code generation are intentionally outside the first MVP.
-

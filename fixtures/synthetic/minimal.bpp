@@ -1,8 +1,17 @@
 ; Synthetic fixture — not derived from vendor production data
 [HEADER]
-L=800
-H=400
-T=18
+TYPE=BPP
+VER=150
+
+[VARIABLES]
+PAN=LPX|800||4|
+PAN=LPY|400||4|
+PAN=LPZ|18||4|
+
 [PROGRAM]
-UNKNOWN_TEST_RECORD
+@ BG, "", "", 1001, "", 0 : 0, "1", 20, 30, 0, 10, 5, 0, 2, 50, 0, 50, 0, 45, 4, "Synthetic drill row"
+@ ROUT, "", "", 1002, "", 0 : "P1002", 0, "1", 0, 6, "", 1, 8
+  @ START_POINT, "", "", 1003, "", 0 : 10, 100, 0
+  @ LINE_EP, "", "", 1004, "", 0 : 790, 100, 0, 0
+  @ ENDPATH, "", "", 1005, "", 0 :
 

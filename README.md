@@ -1,5 +1,7 @@
 # OpenCNC
 
+[![CI](https://github.com/heizeroliver/OpenCNC/actions/workflows/ci.yml/badge.svg)](https://github.com/heizeroliver/OpenCNC/actions/workflows/ci.yml)
+
 **A read-only interoperability toolkit for woodworking CNC files.**
 
 OpenCNC aims to make proprietary CNC program data inspectable and portable through a vendor-neutral JSON representation. The early MVP reads Biesse BPP/CIX documents, validates basic geometry, and renders SVG previews.
@@ -8,7 +10,18 @@ OpenCNC aims to make proprietary CNC program data inspectable and portable throu
 
 ## Current status
 
-🚧 **Early-stage project:** the current code is tested against synthetic fixtures only. It is not yet verified against representative production files. If you understand BPP, CIX, or woodworking CNC formats, contributions and permission-cleared fixtures are especially valuable.
+🚧 **Early-stage project:** the parser has been verified locally against 18 representative BPP/CIX exports. Those private production files are not distributed; public regression tests use independently written synthetic fixtures.
+
+Current verified coverage:
+
+- BPP v150 panel variables and compact program records
+- CIX text-macro blocks (`BEGIN` / `PARAM` / `END`), not XML
+- Drilling (`BG` and `BV`) with face, position, depth, and diameter
+- Linear drill repetitions with count and X/Y offsets
+- Routed line paths (`ROUT`, `START_POINT`, `LINE_EP`, `ENDPATH`)
+- Structured diagnostics and SVG previews
+
+See [format support](docs/format-support.md) for boundaries and known differences.
 
 ## Quick start
 
@@ -16,6 +29,7 @@ OpenCNC aims to make proprietary CNC program data inspectable and portable throu
 pnpm install
 pnpm test
 pnpm build
+pnpm opencnc summary path/to/file.cix
 pnpm opencnc inspect path/to/file.bpp
 pnpm opencnc svg path/to/file.cix --out preview.svg
 ```
@@ -35,7 +49,7 @@ pnpm opencnc svg path/to/file.cix --out preview.svg
 - G-code or machine-control generation
 - Uploading production files to a service
 - Silently guessing ambiguous units or operation semantics
-- Claiming complete Biesse compatibility without real-world fixtures
+- Claiming complete compatibility from the currently verified sample set
 
 ## Roadmap and contributing
 

@@ -3,12 +3,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import { extname, basename } from "node:path";
 import { parseBpp } from "../../../packages/parser-bpp/src/index.js";
 import { parseCix } from "../../../packages/parser-cix/src/index.js";
-import { validateDocument } from "../../../packages/core/src/index.js";
+import { operationPoints, validateDocument } from "../../../packages/core/src/index.js";
 import { renderSvg } from "../../../packages/svg/src/index.js";
 
 const [command, file, ...args] = process.argv.slice(2);
-if (!command || !file || !["inspect", "svg", "validate"].includes(command)) {
-  console.error("Usage: opencnc <inspect|validate|svg> <file.bpp|file.cix> [--out preview.svg]");
+if (!command || !file || !["inspect", "summary", "svg", "validate"].includes(command)) {
+  console.error("Usage: opencnc <inspect|summary|validate|svg> <file.bpp|file.cix> [--out preview.svg]");
   process.exit(1);
 }
 const input = await readFile(file, "utf8");
@@ -18,6 +18,11 @@ const document = extension === ".bpp" ? parseBpp(input, basename(file)) : parseC
 document.diagnostics.push(...validateDocument(document));
 
 if (command === "inspect") console.log(JSON.stringify(document, null, 2));
+if (command === "summary") {
+  const byKind = Object.fromEntries(["drill", "route", "cut", "unknown"].map(kind => [kind, document.operations.filter(operation => operation.kind === kind).length]));
+  const diagnostics = Object.fromEntries(["error", "warning", "info"].map(severity => [severity, document.diagnostics.filter(diagnostic => diagnostic.severity === severity).length]));
+  console.log(JSON.stringify({ source: document.source, panel: document.panel, operationCount: document.operations.length, expandedGeometryCount: document.operations.reduce((count, operation) => count + operationPoints(operation).length, 0), byKind, diagnostics }, null, 2));
+}
 if (command === "validate") {
   console.log(JSON.stringify(document.diagnostics, null, 2));
   if (document.diagnostics.some(d => d.severity === "error")) process.exitCode = 2;
@@ -29,4 +34,3 @@ if (command === "svg") {
   await writeFile(output, renderSvg(document), "utf8");
   console.log(`Wrote ${output}`);
 }
-
