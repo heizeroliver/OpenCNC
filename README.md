@@ -4,7 +4,7 @@
 
 **A read-only interoperability toolkit for woodworking CNC files.**
 
-OpenCNC aims to make proprietary CNC program data inspectable and portable through a vendor-neutral JSON representation. The early MVP reads Biesse BPP/CIX documents, validates basic geometry, and renders SVG previews.
+OpenCNC makes proprietary CNC program data inspectable through a clear, local workshop view and a vendor-neutral JSON representation. The early MVP reads Biesse BPP/CIX documents, validates geometry, compares matching exports, and renders SVG previews.
 
 > **Safety boundary:** OpenCNC does not generate G-code or machine-control output. Parsed data and previews must not be used as the sole basis for operating machinery.
 
@@ -14,6 +14,10 @@ OpenCNC aims to make proprietary CNC program data inspectable and portable throu
 
 Current verified coverage:
 
+- Local Hungarian/English workshop viewer with drag-and-drop batch opening
+- Workpiece dimensions, expanded drill counts, grouped drill lists, and route lengths
+- Side-by-side checking of matching BPP/CIX exports
+- Print-ready job sheets plus JSON and SVG export
 - BPP v150 panel variables and compact program records
 - CIX text-macro blocks (`BEGIN` / `PARAM` / `END`), not XML
 - Drilling (`BG` and `BV`) with face, position, depth, and diameter
@@ -24,6 +28,21 @@ Current verified coverage:
 See [format support](docs/format-support.md) for boundaries and known differences.
 
 ## Quick start
+
+### Workshop viewer
+
+On a Mac, double-click **`OpenCNC Workshop.command`**. The first run prepares the project; then the viewer opens in the browser. Keep the small Terminal window open while using it.
+
+Or start it from Terminal:
+
+```sh
+pnpm install
+pnpm viewer:open
+```
+
+Drop one or more `.bpp` or `.cix` files onto the page. Files are processed only in the browser on that computer and are never uploaded.
+
+### Developer tools
 
 ```sh
 pnpm install
@@ -41,6 +60,7 @@ pnpm opencnc svg path/to/file.cix --out preview.svg
 - `packages/parser-cix`: conservative CIX reader
 - `packages/svg`: safe SVG preview renderer
 - `apps/cli`: local inspection CLI
+- `apps/viewer`: private, browser-based workshop interface
 - `fixtures/synthetic`: non-proprietary test inputs
 - `docs`: format notes and project decisions
 

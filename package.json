@@ -1,20 +1,24 @@
 {
   "name": "opencnc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@11.19.0",
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && vite build apps/viewer",
     "test": "vitest run",
     "check": "tsc -b --pretty false",
-    "opencnc": "tsx apps/cli/src/index.ts"
+    "opencnc": "tsx apps/cli/src/index.ts",
+    "viewer": "vite apps/viewer --host 127.0.0.1",
+    "viewer:open": "vite apps/viewer --host 127.0.0.1 --open",
+    "viewer:build": "vite build apps/viewer"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
+    "vite": "^7.3.0",
     "vitest": "^3.2.0"
   }
 }
