@@ -1,0 +1,40 @@
+name: Windows Local Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feature/windows-local-agent]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm agent:package:win
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $installer = Get-Item "release/OpenCNC-Local-Agent-Setup.exe"
+          if ($installer.Length -lt 1MB) { throw "Installer is unexpectedly small" }
+          Get-FileHash $installer.FullName -Algorithm SHA256
+      - uses: actions/upload-artifact@v6
+        with:
+          name: OpenCNC-Windows-Installer
+          path: release/OpenCNC-Local-Agent-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
