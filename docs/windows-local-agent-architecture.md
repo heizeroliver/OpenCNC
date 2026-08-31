@@ -29,3 +29,7 @@ The browser folder workflow remains constrained by user-granted directory handle
 ## Platform direction
 
 The existing TypeScript and Node implementation makes an Electron tray application the lowest-duplication Windows packaging path. It can bundle its runtime, host the existing local viewer, provide tray/notification/startup APIs, and call the shared Node filesystem agent without requiring Node.js or pnpm on the target computer. Platform integration must remain isolated under `apps/windows-agent`; conversion stays in `packages/converter` and automation state stays in `packages/agent-core`.
+
+## Extracted core
+
+`packages/agent-core` now owns the retry/stability controller, generic cycle runner, lifecycle events, serializable attempt state, persistent configuration/runtime/history interfaces, Node project discovery, guarded project conversion, QA/report generation, and atomic workspace writes. `apps/cli/src/workspace-watch.ts` is a compatibility adapter that maps CLI options and console events onto this shared core. Existing CLI exports remain available to avoid breaking callers and tests.

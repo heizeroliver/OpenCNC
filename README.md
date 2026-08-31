@@ -80,6 +80,7 @@ pnpm opencnc validate path/to/file.cix --machine-profile path/to/machine-profile
 ## Repository layout
 
 - `packages/core`: intermediate representation, diagnostics, and validation
+- `packages/agent-core`: reusable discovery, stability, retry, lifecycle, persistence contracts, and Node workspace automation
 - `packages/parser-bpp`: conservative BPP reader
 - `packages/parser-cix`: conservative CIX reader
 - `packages/converter`: strict serializers and semantic round-trip verification
