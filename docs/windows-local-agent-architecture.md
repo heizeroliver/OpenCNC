@@ -33,3 +33,9 @@ The existing TypeScript and Node implementation makes an Electron tray applicati
 ## Extracted core
 
 `packages/agent-core` now owns the retry/stability controller, generic cycle runner, lifecycle events, serializable attempt state, persistent configuration/runtime/history interfaces, Node project discovery, guarded project conversion, QA/report generation, and atomic workspace writes. `apps/cli/src/workspace-watch.ts` is a compatibility adapter that maps CLI options and console events onto this shared core. Existing CLI exports remain available to avoid breaking callers and tests.
+
+## Implemented Windows process boundary
+
+`apps/windows-agent` is a thin Electron platform shell around that same core. Its main process owns tray/menu, notifications, folder pickers, login startup, application windows, SQLite lifetime, and clean shutdown. A sandboxed/context-isolated preload exposes only narrow configuration/status actions to a static renderer. The renderer never receives filesystem or Node access. The existing viewer is bundled as a separate local window; it does not drive background project selection.
+
+The service saves configuration, attempts, and job history through `SqliteAgentStore`. Discovery/conversion remains in `packages/agent-core/src/node-workspace.ts`, and conversion remains in `packages/converter`. Case/Unicode-equivalent Windows collisions and read-during-export changes fail before a production write. Electron-builder packages an x64 assisted NSIS installer; Windows GitHub Actions is the authoritative native build/test environment.
