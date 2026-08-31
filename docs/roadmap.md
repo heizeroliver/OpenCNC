@@ -16,10 +16,25 @@
 
 ## Phase 2 — useful local viewer
 
-- Interactive local preview
-- Operation filters and source-to-preview traceability
+- Interactive local preview (initial workshop view complete)
+- Operation filters and source-to-preview traceability (initial layer controls and highlighting complete)
+- Guarded BPP/CIX conversion with semantic round-trip verification (supported subset complete)
+- Bulk BPP/CIX conversion with reverse verification and per-file fidelity reporting (complete)
+- Conversion Diff Center with source/target/reverse field classification (complete)
+- Order-independent, tolerance-aware operation matching with expanded repetition support (complete)
+- Bulk preflight with selection, naming templates, editable ZIP/output names, and conflict blocking (complete)
+- Explicit BPP/CIX dialect profiles with evidence-based auto-detection and report visibility (initial observed profiles complete)
+- Staged advanced-operation model with verified counter-clockwise `ARC_EPCE` conversion plus preview/fail-closed handling for other arcs, geometry, pockets, and cuts
+- Optional local machine profiles with advisory preflight checks (initial travel/face/depth/tool checks complete)
+- Production QA package with PDF workpiece sheet, checksums, report QR, and sign-off (complete)
+- Regression Corpus Lab with anonymization, robustness mutations, reduced fixtures, and previous-run comparison (complete)
+- Local project sessions with operator notes, simulation status, conversion report, and previous/current comparison (complete)
+- User-approved parent-folder browser workflow with project listing and direct `BPP` subfolder export (complete)
+- Ten-second stable-file polling and persisted folder handles with explicit reconnect state (complete)
+- Cross-platform unattended Node watcher with checksum manifests and conflict-safe updates (complete)
 - JSON Schema publication
-- More robust geometric validation
+- Corpus verification and guarded serialization for remaining advanced operation families
+- Exact envelopes for clockwise `ARC_EPCE`, `ARC_EPRA`, `ARC_IPEP`, and transformed coordinates
 
 ## Later
 

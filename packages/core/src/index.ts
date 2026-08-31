@@ -10,6 +10,34 @@ export interface Diagnostic {
 
 export interface Point { x: number; y: number; z?: number }
 
+export type OperationKind = "drill" | "route" | "geometry" | "pocket" | "saw" | "groove" | "tool-change" | "transform" | "cut" | "unknown";
+export type OperationSupportStage = "preserved" | "preview" | "validated" | "experimental-conversion" | "verified-conversion";
+
+export interface LineSegment {
+  kind: "line";
+  start: Point;
+  end: Point;
+}
+
+export interface ArcSegment {
+  kind: "arc";
+  start: Point;
+  end: Point;
+  center?: Point;
+  via?: Point;
+  radius?: number;
+  clockwise?: boolean;
+}
+
+export type PathSegment = LineSegment | ArcSegment;
+
+export interface OperationSupport {
+  stage: OperationSupportStage;
+  geometry: "exact" | "partial" | "none";
+  conversion: boolean;
+  note?: string;
+}
+
 export interface Panel {
   width?: number;
   height?: number;
@@ -19,7 +47,7 @@ export interface Panel {
 
 export interface Operation {
   id: string;
-  kind: "drill" | "route" | "cut" | "unknown";
+  kind: OperationKind;
   sourceType: string;
   face?: number;
   label?: string;
@@ -27,6 +55,9 @@ export interface Operation {
   depth?: number;
   diameter?: number;
   path?: Point[];
+  segments?: PathSegment[];
+  geometryRef?: string;
+  support?: OperationSupport;
   repeat?: { count: number; offset: Point };
   raw: Record<string, unknown>;
 }
@@ -43,7 +74,14 @@ export interface OpenCncDocument {
 const MAX_EXPANDED_POINTS = 100_000;
 
 export function operationPoints(operation: Operation): Point[] {
-  if (!operation.position) return operation.path ?? [];
+  if (!operation.position) {
+    const points = operation.path ?? [];
+    if (!operation.segments?.length) return points;
+    const segmentPoints = operation.segments.flatMap(segment => segment.kind === "arc" && segment.via
+      ? [segment.start, segment.via, segment.end]
+      : [segment.start, segment.end]);
+    return [...points, ...segmentPoints].filter((point, index, all) => all.findIndex(candidate => candidate.x === point.x && candidate.y === point.y && (candidate.z ?? 0) === (point.z ?? 0)) === index);
+  }
   if (!operation.repeat || operation.repeat.count <= 1) return [operation.position];
   const count = Math.min(operation.repeat.count, MAX_EXPANDED_POINTS);
   return Array.from({ length: count }, (_, index) => ({
@@ -69,10 +107,10 @@ export function validateDocument(document: OpenCncDocument): Diagnostic[] {
       diagnostics.push({ severity: "error", code: "INVALID_OPERATION_COORDINATE", message: `Operation ${operation.id} contains a non-finite coordinate`, location: { record: operation.id } });
     } else if (width !== undefined && height !== undefined && points.some(({ x, y }) => x < 0 || y < 0 || x > width || y > height)) {
       diagnostics.push({
-        severity: operation.kind === "route" ? "info" : "warning",
-        code: operation.kind === "route" ? "ROUTE_EXTENDS_OUTSIDE_PANEL" : "OPERATION_OUTSIDE_PANEL",
-        message: operation.kind === "route"
-          ? `Route ${operation.id} extends outside the panel; this may be an intentional lead-in or lead-out`
+        severity: operation.kind === "route" || operation.kind === "geometry" ? "info" : "warning",
+        code: operation.kind === "route" || operation.kind === "geometry" ? "PATH_EXTENDS_OUTSIDE_PANEL" : "OPERATION_OUTSIDE_PANEL",
+        message: operation.kind === "route" || operation.kind === "geometry"
+          ? `Path ${operation.id} extends outside the panel; this may be an intentional lead-in or lead-out`
           : `Operation ${operation.id} extends outside the panel`,
         location: { record: operation.id }
       });

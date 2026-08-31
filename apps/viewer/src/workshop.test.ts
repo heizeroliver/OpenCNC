@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenCncDocument } from "../../../packages/core/src/index.js";
-import { compareDocuments, groupDrills, groupRoutes, jobStem, summarizeDocument } from "./workshop.js";
+import { compareDocuments, filterPreviewOperations, groupDrills, groupRoutes, jobStem, previewLayer, summarizeDocument } from "./workshop.js";
 
 const document: OpenCncDocument = {
   schemaVersion: "0.1",
@@ -17,20 +17,30 @@ const document: OpenCncDocument = {
 describe("workshop summaries", () => {
   it("counts expanded drilling and groups workshop operations", () => {
     expect(summarizeDocument(document)).toMatchObject({ drillCount: 4, routeCount: 1, warningCount: 1 });
-    expect(groupDrills(document.operations)).toMatchObject([{ quantity: 4, diameter: 5, depth: 10 }]);
-    expect(groupRoutes(document.operations)).toMatchObject([{ quantity: 1, totalLength: 500, diameter: 8, depth: 6 }]);
+    expect(groupDrills(document.operations)).toMatchObject([{ quantity: 4, diameter: 5, depth: 10, references: [{ id: "d1", sourceType: "BG" }] }]);
+    expect(groupRoutes(document.operations)).toMatchObject([{ quantity: 1, totalLength: 500, diameter: 8, depth: 6, references: [{ id: "r1", sourceType: "ROUT" }] }]);
   });
 
   it("compares matching normalized geometry", () => {
     const other = structuredClone(document);
     other.source = { format: "bpp", name: "panel.bpp" };
-    expect(compareDocuments(document, other)).toEqual({ dimensionsMatch: true, geometryMatch: true });
+    expect(compareDocuments(document, other)).toMatchObject({ dimensionsMatch: true, geometryMatch: true, semanticMatch: true, exact: 2 });
     other.panel.width = 801;
-    expect(compareDocuments(document, other)).toEqual({ dimensionsMatch: false, geometryMatch: false });
+    expect(compareDocuments(document, other)).toMatchObject({ dimensionsMatch: false, geometryMatch: false, semanticMatch: false });
   });
 
   it("normalizes paired filenames", () => {
     expect(jobStem("Panel_01.BPP")).toBe("panel_01");
   });
-});
 
+  it("filters preview layers while excluding unknown records", () => {
+    const operations = [
+      ...document.operations,
+      { id: "side", kind: "drill" as const, sourceType: "BV", face: 1, position: { x: 5, y: 5 }, raw: { line: 42 } },
+      { id: "wait", kind: "unknown" as const, sourceType: "WAIT", raw: {} }
+    ];
+    expect(previewLayer(operations[0]!)).toBe("topDrill");
+    expect(previewLayer(operations[2]!)).toBe("sideDrill");
+    expect(filterPreviewOperations(operations, { topDrill: false, sideDrill: true, route: true, advanced: true }).map(operation => operation.id)).toEqual(["r1", "side"]);
+  });
+});

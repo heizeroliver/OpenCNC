@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "0.1",
+  "id": "synthetic-3-axis",
+  "name": "Synthetic 3-axis validation profile",
+  "travel": {
+    "minX": 0,
+    "maxX": 550,
+    "minY": 0,
+    "maxY": 280,
+    "minZ": -80,
+    "maxZ": 80
+  },
+  "supportedFaces": [0],
+  "maxDrillDepth": 18,
+  "maxRouteDepth": 7,
+  "maxSawDepth": 6,
+  "availableTools": [
+    { "id": "D5", "kind": "drill", "diameter": 5, "maxDepth": 18 },
+    { "id": "R8", "kind": "router", "diameter": 8, "maxDepth": 7 },
+    { "id": "S4", "kind": "saw", "diameter": 4, "maxDepth": 6 }
+  ],
+  "notes": "Synthetic fixture only; not a real machine configuration."
+}
