@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { bulkConvertAndVerify, type BulkConversionReport } from "../../converter/src/index.js";
 import { validateDocument } from "../../core/src/index.js";
@@ -73,6 +73,42 @@ export const validateOutputFolderName = (value: string): string => {
   return name;
 };
 
+export interface CaseInsensitiveCollision {
+  normalizedName: string;
+  names: string[];
+}
+
+export const caseInsensitiveNameCollisions = (names: string[]): CaseInsensitiveCollision[] => {
+  const groups = new Map<string, string[]>();
+  for (const name of names) {
+    const key = name.normalize("NFC").toLocaleLowerCase();
+    const values = groups.get(key) ?? [];
+    values.push(name);
+    groups.set(key, values);
+  }
+  return [...groups.entries()]
+    .filter(([, values]) => values.length > 1)
+    .map(([normalizedName, values]) => ({ normalizedName, names: values.sort((left, right) => left.localeCompare(right)) }))
+    .sort((left, right) => left.normalizedName.localeCompare(right.normalizedName));
+};
+
+export interface StableSourceReadDependencies {
+  read(path: string): Promise<string>;
+  inspect(path: string): Promise<{ size: number; mtimeMs: number }>;
+}
+
+export async function readStableWorkspaceSource(
+  file: NodeWorkspaceProject["files"][number],
+  dependencies: StableSourceReadDependencies = { read: path => readFile(path, "utf8"), inspect: path => stat(path) }
+): Promise<string> {
+  const sourceText = await dependencies.read(file.path);
+  const after = await dependencies.inspect(file.path);
+  if (after.size !== file.size || after.mtimeMs !== file.lastModified) {
+    throw Object.assign(new Error(`${file.name} changed while OpenCNC was reading it; waiting for a stable export`), { code: "WORKSPACE_SOURCE_CHANGED" });
+  }
+  return sourceText;
+}
+
 const sourceFiles = async (directory: string): Promise<NodeWorkspaceProject["files"]> => {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(entries.filter(entry => entry.isFile() && /\.cix$/i.test(entry.name)).map(async entry => {
@@ -105,8 +141,14 @@ export async function discoverNodeWorkspaceProjects(rootDirectory: string, proje
 
 export const atomicWorkspaceWrite = async (path: string, contents: string | Uint8Array): Promise<void> => {
   const temporary = join(dirname(path), `.opencnc-${basename(path)}-${process.pid}-${randomUUID()}.tmp`);
-  await writeFile(temporary, contents);
-  await rename(temporary, path);
+  try {
+    await writeFile(temporary, contents);
+    await rename(temporary, path);
+  } catch (error) {
+    try { await unlink(temporary); }
+    catch (cleanupError) { if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw new AggregateError([error, cleanupError], `Atomic write and temporary-file cleanup both failed for ${path}`); }
+    throw error;
+  }
 };
 
 const bppFiles = async (directory: string): Promise<string[]> => {
@@ -117,7 +159,13 @@ const bppFiles = async (directory: string): Promise<string[]> => {
 export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject, options: NodeWorkspaceConversionOptions = {}): Promise<NodeWorkspaceProjectResult> {
   const outputFolder = validateOutputFolderName(options.outputFolder ?? "BPP");
   const outputDirectory = join(project.directory, outputFolder);
-  const sources = await Promise.all(project.files.map(async file => ({ ...file, sourceText: await readFile(file.path, "utf8") })));
+  const sourceCollisions = caseInsensitiveNameCollisions(project.files.map(file => file.name));
+  if (sourceCollisions.length) return {
+    projectName: project.name, status: "conflict", sourceCount: project.files.length, written: 0, updated: 0, unchanged: 0,
+    conflicts: sourceCollisions.flatMap(collision => collision.names), orphanedOutputs: [], outputDirectory,
+    message: `Windows case-insensitive source collision: ${sourceCollisions.map(collision => collision.names.join(" / ")).join("; ")}`
+  };
+  const sources = await Promise.all(project.files.map(async file => ({ ...file, sourceText: await readStableWorkspaceSource(file) })));
   const inputs = sources.map(source => {
     const document = parseCix(source.sourceText, source.name);
     document.diagnostics.push(...validateDocument(document));
@@ -128,6 +176,12 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
   if (blocked.length) return {
     projectName: project.name, status: "blocked", sourceCount: sources.length, written: 0, updated: 0, unchanged: 0, conflicts: [], orphanedOutputs: [], outputDirectory,
     report: conversion.report, message: `${blocked.length}/${conversion.outputs.length} conversion job(s) failed guarded conversion; nothing was written`
+  };
+  const outputCollisions = caseInsensitiveNameCollisions(conversion.outputs.map(item => item.outputName));
+  if (outputCollisions.length) return {
+    projectName: project.name, status: "conflict", sourceCount: sources.length, written: 0, updated: 0, unchanged: 0,
+    conflicts: outputCollisions.flatMap(collision => collision.names), orphanedOutputs: [], outputDirectory, report: conversion.report,
+    message: `Windows case-insensitive BPP output collision: ${outputCollisions.map(collision => collision.names.join(" / ")).join("; ")}`
   };
 
   const previousManifest = parseWorkspaceManifest(await readOptional(join(outputDirectory, NODE_WORKSPACE_MANIFEST_FILE)));
