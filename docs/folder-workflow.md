@@ -41,12 +41,16 @@ The local watcher uses Node.js and the existing TypeScript conversion engine; Py
 pnpm opencnc watch path/to/parent-folder --interval 10
 ```
 
+Transient project failures such as a temporarily locked file remain retryable even when the CIX fingerprint does not change. The watcher starts with a five-second retry delay, doubles it after each consecutive failure, and caps it at five minutes. A successful or already-current result clears retry state and is not rerun for the same fingerprint. Guarded conversion blocks and checksum conflicts are permanent for that fingerprint; the watcher waits for a source change instead of repeatedly attempting or weakening overwrite protection.
+
 Options:
 
 - `--project "Kitchen 42"` watches only one immediate project folder.
 - `--output-folder BPP` changes the output subfolder name.
 - `--qa` generates QA PDF sheets under `BPP/QA`.
 - `--machine-profile machine.json` adds the configured advisory checks.
+- `--stability-scans 2` controls how many identical observations are required before conversion.
+- `--retry-initial 5` and `--retry-max 300` configure bounded exponential retry delays in seconds.
 - `--once` performs one immediate pass and exits; it is useful for scheduled jobs and testing.
 
 For a simple local installation, use `OpenCNC Auto Watch.command` on macOS or `OpenCNC Auto Watch.ps1` on Windows. Each launcher shows a native folder chooser, then keeps the watcher visible in a terminal window. Press Control-C to stop it.

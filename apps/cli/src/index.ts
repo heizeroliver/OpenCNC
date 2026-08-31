@@ -15,7 +15,7 @@ const [command, inputPath, ...args] = process.argv.slice(2);
 const commands = ["bulk-convert", "convert", "corpus-lab", "inspect", "summary", "svg", "validate", "watch"];
 
 const usage = (): never => {
-  console.error("Usage:\n  opencnc <convert|inspect|summary|validate|svg> <file.bpp|file.cix> [--to bpp|cix] [--out output] [--qa-pdf job-sheet.pdf] [--machine-profile profile.json]\n  opencnc bulk-convert <input-directory> --out-dir <new-output-directory> [--machine-profile profile.json]\n  opencnc corpus-lab <input-directory> --out corpus-report.json [--export-dir anonymized-corpus]\n  opencnc watch <parent-directory> [--interval 10] [--project folder-name] [--output-folder BPP] [--qa] [--once]");
+  console.error("Usage:\n  opencnc <convert|inspect|summary|validate|svg> <file.bpp|file.cix> [--to bpp|cix] [--out output] [--qa-pdf job-sheet.pdf] [--machine-profile profile.json]\n  opencnc bulk-convert <input-directory> --out-dir <new-output-directory> [--machine-profile profile.json]\n  opencnc corpus-lab <input-directory> --out corpus-report.json [--export-dir anonymized-corpus]\n  opencnc watch <parent-directory> [--interval 10] [--stability-scans 2] [--retry-initial 5] [--retry-max 300] [--project folder-name] [--output-folder BPP] [--qa] [--once]");
   process.exit(1);
 };
 
@@ -154,9 +154,18 @@ const corpusLab = async (): Promise<void> => {
 const watchCommand = async (): Promise<void> => {
   const intervalSeconds = Number(option("--interval") ?? "10");
   if (!Number.isFinite(intervalSeconds) || intervalSeconds < 2 || intervalSeconds > 3600) throw new Error("watch --interval must be between 2 and 3600 seconds");
+  const stabilityScans = Number(option("--stability-scans") ?? "2");
+  if (!Number.isInteger(stabilityScans) || stabilityScans < 1 || stabilityScans > 100) throw new Error("watch --stability-scans must be an integer between 1 and 100");
+  const retryInitialSeconds = Number(option("--retry-initial") ?? "5");
+  const retryMaxSeconds = Number(option("--retry-max") ?? "300");
+  if (!Number.isFinite(retryInitialSeconds) || retryInitialSeconds < 1 || retryInitialSeconds > 3600) throw new Error("watch --retry-initial must be between 1 and 3600 seconds");
+  if (!Number.isFinite(retryMaxSeconds) || retryMaxSeconds < retryInitialSeconds || retryMaxSeconds > 86_400) throw new Error("watch --retry-max must be at least --retry-initial and no more than 86400 seconds");
   const machineProfile = await readMachineProfile();
   const options = {
     rootDirectory: selectedInputPath,
+    stabilityScans,
+    retryInitialSeconds,
+    retryMaxSeconds,
     ...(option("--output-folder") ? { outputFolder: option("--output-folder")! } : {}),
     ...(option("--project") ? { projectFilter: option("--project")! } : {}),
     ...(machineProfile ? { machineProfile } : {}),

@@ -22,6 +22,9 @@ export interface WatchWorkspaceOptions {
   includeQa?: boolean;
   machineProfile?: MachineProfile;
   projectFilter?: string;
+  stabilityScans?: number;
+  retryInitialSeconds?: number;
+  retryMaxSeconds?: number;
 }
 
 export interface WatchProject {
@@ -49,6 +52,124 @@ export interface WatchWorkspaceResult {
   rootDirectory: string;
   projects: WatchProjectResult[];
   summary: { total: number; converted: number; unchanged: number; blocked: number; conflicts: number };
+}
+
+export type WatchAttemptStatus = "waiting_for_stability" | "ready" | "retrying" | "completed" | "blocked" | "conflicted";
+
+export interface WatchAttemptSnapshot {
+  fingerprint: string;
+  stableScans: number;
+  status: WatchAttemptStatus;
+  retryCount: number;
+  nextAttemptAt?: number;
+  lastError?: string;
+}
+
+export interface WatchAttemptDecision {
+  attempt: boolean;
+  status: WatchAttemptStatus;
+  retryCount: number;
+  nextAttemptAt?: number;
+}
+
+export interface WatchRetryPolicy {
+  stabilityScans: number;
+  initialDelayMs: number;
+  maximumDelayMs: number;
+}
+
+const DEFAULT_RETRY_POLICY: WatchRetryPolicy = { stabilityScans: 2, initialDelayMs: 5_000, maximumDelayMs: 5 * 60_000 };
+
+export const exponentialRetryDelay = (retryCount: number, initialDelayMs: number, maximumDelayMs: number): number => {
+  const safeRetryCount = Math.max(1, Math.floor(retryCount));
+  const safeInitial = Math.max(1, Math.floor(initialDelayMs));
+  const safeMaximum = Math.max(safeInitial, Math.floor(maximumDelayMs));
+  return Math.min(safeMaximum, safeInitial * 2 ** Math.min(30, safeRetryCount - 1));
+};
+
+export class WatchAttemptController {
+  private readonly states = new Map<string, WatchAttemptSnapshot>();
+  readonly policy: WatchRetryPolicy;
+
+  constructor(policy: Partial<WatchRetryPolicy> = {}) {
+    this.policy = {
+      stabilityScans: Math.max(1, Math.floor(policy.stabilityScans ?? DEFAULT_RETRY_POLICY.stabilityScans)),
+      initialDelayMs: Math.max(1, Math.floor(policy.initialDelayMs ?? DEFAULT_RETRY_POLICY.initialDelayMs)),
+      maximumDelayMs: Math.max(1, Math.floor(policy.maximumDelayMs ?? DEFAULT_RETRY_POLICY.maximumDelayMs))
+    };
+    if (this.policy.maximumDelayMs < this.policy.initialDelayMs) this.policy.maximumDelayMs = this.policy.initialDelayMs;
+  }
+
+  observe(project: Pick<WatchProject, "directory" | "fingerprint">, now = Date.now()): WatchAttemptDecision {
+    const previous = this.states.get(project.directory);
+    const state: WatchAttemptSnapshot = !previous || previous.fingerprint !== project.fingerprint
+      ? { fingerprint: project.fingerprint, stableScans: 1, status: "waiting_for_stability", retryCount: 0 }
+      : { ...previous, stableScans: Math.min(this.policy.stabilityScans, previous.stableScans + 1) };
+    if (state.stableScans < this.policy.stabilityScans) state.status = "waiting_for_stability";
+    else if (state.status === "waiting_for_stability") state.status = "ready";
+    this.states.set(project.directory, state);
+
+    const retryDue = state.status === "retrying" && (state.nextAttemptAt ?? 0) <= now;
+    return {
+      attempt: state.status === "ready" || retryDue,
+      status: state.status,
+      retryCount: state.retryCount,
+      ...(state.nextAttemptAt !== undefined ? { nextAttemptAt: state.nextAttemptAt } : {})
+    };
+  }
+
+  recordSuccess(directory: string): void {
+    const state = this.required(directory);
+    this.states.set(directory, { fingerprint: state.fingerprint, stableScans: state.stableScans, status: "completed", retryCount: 0 });
+  }
+
+  recordPermanent(directory: string, status: "blocked" | "conflicted", message?: string): void {
+    const state = this.required(directory);
+    this.states.set(directory, { fingerprint: state.fingerprint, stableScans: state.stableScans, status, retryCount: state.retryCount, ...(message ? { lastError: message } : {}) });
+  }
+
+  recordTransientFailure(directory: string, error: unknown, now = Date.now()): WatchAttemptSnapshot {
+    const state = this.required(directory);
+    const retryCount = state.retryCount + 1;
+    const delay = exponentialRetryDelay(retryCount, this.policy.initialDelayMs, this.policy.maximumDelayMs);
+    const next: WatchAttemptSnapshot = {
+      fingerprint: state.fingerprint,
+      stableScans: state.stableScans,
+      status: "retrying",
+      retryCount,
+      nextAttemptAt: now + delay,
+      lastError: error instanceof Error ? error.message : String(error)
+    };
+    this.states.set(directory, next);
+    return structuredClone(next);
+  }
+
+  snapshot(directory: string): WatchAttemptSnapshot | undefined {
+    const state = this.states.get(directory);
+    return state ? structuredClone(state) : undefined;
+  }
+
+  prune(activeDirectories: Iterable<string>): void {
+    const active = new Set(activeDirectories);
+    for (const directory of this.states.keys()) if (!active.has(directory)) this.states.delete(directory);
+  }
+
+  private required(directory: string): WatchAttemptSnapshot {
+    const state = this.states.get(directory);
+    if (!state) throw new Error(`No watcher state exists for ${directory}`);
+    return state;
+  }
+}
+
+export interface WatchCycleOptions extends WatchWorkspaceOptions {
+  intervalSeconds: number;
+  onEvent: (message: string, tone: "info" | "success" | "warning" | "error") => void;
+}
+
+export interface WatchCycleDependencies {
+  discover: typeof discoverWatchProjects;
+  convert: typeof convertWatchProject;
+  now: () => number;
 }
 
 const MANIFEST_FILE = "opencnc-sync-manifest.json";
@@ -205,21 +326,45 @@ export async function runWorkspaceOnce(options: WatchWorkspaceOptions): Promise<
   };
 }
 
-export async function watchWorkspace(options: WatchWorkspaceOptions & { intervalSeconds: number; onEvent: (message: string, tone: "info" | "success" | "warning" | "error") => void }): Promise<never> {
-  const observed = new Map<string, string>();
-  const attempted = new Map<string, string>();
+const retryPolicyFromOptions = (options: WatchWorkspaceOptions): Partial<WatchRetryPolicy> => ({
+  ...(options.stabilityScans !== undefined ? { stabilityScans: options.stabilityScans } : {}),
+  ...(options.retryInitialSeconds !== undefined ? { initialDelayMs: options.retryInitialSeconds * 1000 } : {}),
+  ...(options.retryMaxSeconds !== undefined ? { maximumDelayMs: options.retryMaxSeconds * 1000 } : {})
+});
+
+export async function runWatchCycle(
+  options: WatchCycleOptions,
+  controller: WatchAttemptController,
+  dependencies: Partial<WatchCycleDependencies> = {}
+): Promise<void> {
+  const discover = dependencies.discover ?? discoverWatchProjects;
+  const convert = dependencies.convert ?? convertWatchProject;
+  const now = dependencies.now?.() ?? Date.now();
+  const projects = await discover(options.rootDirectory, options.projectFilter);
+  controller.prune(projects.map(project => project.directory));
+  for (const project of projects) {
+    const decision = controller.observe(project, now);
+    if (!decision.attempt) continue;
+    try {
+      const result = await convert(project, options);
+      if (result.status === "conflict") controller.recordPermanent(project.directory, "conflicted", result.message);
+      else if (result.status === "blocked") controller.recordPermanent(project.directory, "blocked", result.message);
+      else controller.recordSuccess(project.directory);
+      options.onEvent(`${project.name}: ${result.message}`, result.status === "converted" || result.status === "unchanged" ? "success" : result.status === "conflict" ? "warning" : "error");
+    } catch (error) {
+      const state = controller.recordTransientFailure(project.directory, error, now);
+      const delaySeconds = Math.max(1, Math.ceil(((state.nextAttemptAt ?? now) - now) / 1000));
+      options.onEvent(`${project.name}: ${state.lastError}; transient failure, retry ${state.retryCount} in ${delaySeconds}s`, "error");
+    }
+  }
+}
+
+export async function watchWorkspace(options: WatchCycleOptions): Promise<never> {
+  const controller = new WatchAttemptController(retryPolicyFromOptions(options));
   options.onEvent(`Watching ${resolve(options.rootDirectory)} every ${options.intervalSeconds}s; waiting for exports to settle`, "info");
   for (;;) {
     try {
-      const projects = await discoverWatchProjects(options.rootDirectory, options.projectFilter);
-      for (const project of projects) {
-        const previous = observed.get(project.directory);
-        observed.set(project.directory, project.fingerprint);
-        if (previous !== project.fingerprint || attempted.get(project.directory) === project.fingerprint) continue;
-        attempted.set(project.directory, project.fingerprint);
-        const result = await convertWatchProject(project, options);
-        options.onEvent(`${project.name}: ${result.message}`, result.status === "converted" || result.status === "unchanged" ? "success" : result.status === "conflict" ? "warning" : "error");
-      }
+      await runWatchCycle(options, controller);
     } catch (error) {
       options.onEvent(error instanceof Error ? error.message : String(error), "error");
     }

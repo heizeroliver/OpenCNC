@@ -3,12 +3,84 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
-import { discoverWatchProjects, runWorkspaceOnce } from "./workspace-watch.js";
+import { WatchAttemptController, discoverWatchProjects, exponentialRetryDelay, runWatchCycle, runWorkspaceOnce, type WatchProjectResult } from "./workspace-watch.js";
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => { for (const directory of temporaryDirectories.splice(0)) await rm(directory, { recursive: true, force: true }); });
 
 describe("unattended workspace watcher", () => {
+  it("retries an unchanged project after transient failures with bounded exponential backoff, then clears retry state", async () => {
+    const project = { name: "Network project", directory: "Z:\\Network project", files: [], fingerprint: "stable-fingerprint" };
+    const controller = new WatchAttemptController({ stabilityScans: 1, initialDelayMs: 100, maximumDelayMs: 250 });
+    const events: string[] = [];
+    let now = 0;
+    let attempts = 0;
+    const unchanged: WatchProjectResult = {
+      projectName: project.name, status: "unchanged", sourceCount: 1, written: 0, updated: 0, unchanged: 1,
+      conflicts: [], orphanedOutputs: [], outputDirectory: "Z:\\Network project\\BPP", message: "output already current"
+    };
+    const cycle = (): Promise<void> => runWatchCycle(
+      { rootDirectory: "Z:\\", intervalSeconds: 1, onEvent: message => events.push(message) },
+      controller,
+      {
+        discover: async () => [project],
+        convert: async () => {
+          attempts += 1;
+          if (attempts < 3) throw Object.assign(new Error("file is temporarily locked"), { code: "EBUSY" });
+          return unchanged;
+        },
+        now: () => now
+      }
+    );
+
+    await cycle();
+    expect(attempts).toBe(1);
+    expect(controller.snapshot(project.directory)).toMatchObject({ status: "retrying", retryCount: 1, nextAttemptAt: 100 });
+    now = 99;
+    await cycle();
+    expect(attempts).toBe(1);
+    now = 100;
+    await cycle();
+    expect(attempts).toBe(2);
+    expect(controller.snapshot(project.directory)).toMatchObject({ status: "retrying", retryCount: 2, nextAttemptAt: 300 });
+    now = 299;
+    await cycle();
+    expect(attempts).toBe(2);
+    now = 300;
+    await cycle();
+    expect(attempts).toBe(3);
+    expect(controller.snapshot(project.directory)).toMatchObject({ status: "completed", retryCount: 0 });
+    now = 10_000;
+    await cycle();
+    expect(attempts).toBe(3);
+    expect(events.filter(message => message.includes("transient failure"))).toHaveLength(2);
+  });
+
+  it("caps exponential retry delays", () => {
+    expect([1, 2, 3, 4, 20].map(retry => exponentialRetryDelay(retry, 100, 250))).toEqual([100, 200, 250, 250, 250]);
+  });
+
+  it("does not retry a permanent conflict until the source fingerprint changes", async () => {
+    const project = { name: "Conflict", directory: "C:\\Conflict", files: [], fingerprint: "one" };
+    const controller = new WatchAttemptController({ stabilityScans: 1 });
+    let attempts = 0;
+    const conflict: WatchProjectResult = {
+      projectName: project.name, status: "conflict", sourceCount: 1, written: 0, updated: 0, unchanged: 0,
+      conflicts: ["part.bpp"], orphanedOutputs: [], outputDirectory: "C:\\Conflict\\BPP", message: "manual output edit"
+    };
+    const cycle = (): Promise<void> => runWatchCycle(
+      { rootDirectory: "C:\\", intervalSeconds: 1, onEvent: () => undefined }, controller,
+      { discover: async () => [project], convert: async () => { attempts += 1; return conflict; }, now: () => 0 }
+    );
+    await cycle();
+    await cycle();
+    expect(attempts).toBe(1);
+    expect(controller.snapshot(project.directory)?.status).toBe("conflicted");
+    project.fingerprint = "two";
+    await cycle();
+    expect(attempts).toBe(2);
+  });
+
   it("discovers project folders and safely creates their BPP outputs", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencnc-watch-"));
     temporaryDirectories.push(root);
