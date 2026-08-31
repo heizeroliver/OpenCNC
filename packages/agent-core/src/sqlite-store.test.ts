@@ -4,6 +4,7 @@ import { SqliteAgentStore } from "./sqlite-store.js";
 
 const configuration: AgentConfiguration = {
   schemaVersion: "0.1",
+  automationEnabled: true,
   parentProjectsFolder: "C:\\CNC Projects",
   outputFolder: "BPP",
   scanIntervalSeconds: 10,

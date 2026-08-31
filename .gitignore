@@ -3,6 +3,7 @@ dist/
 coverage/
 work/
 output/
+release/
 tmp/
 fixtures/private/
 .DS_Store

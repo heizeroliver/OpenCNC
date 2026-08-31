@@ -1,0 +1,33 @@
+appId: com.opencnc.localagent
+productName: OpenCNC Local Agent
+copyright: Copyright © 2026 OpenCNC contributors
+asar: true
+npmRebuild: false
+directories:
+  output: release
+files:
+  - dist/**/*
+  - apps/windows-agent/preload.cjs
+  - apps/windows-agent/ui/**/*
+  - package.json
+win:
+  icon: build-resources/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: OpenCNC-Local-Agent-Setup.exe
+  legalTrademarks: OpenCNC
+mac:
+  icon: build-resources/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OpenCNC Local Agent
+  uninstallDisplayName: OpenCNC Local Agent
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false

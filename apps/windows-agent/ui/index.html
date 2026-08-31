@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'none'" />
+    <title>OpenCNC Local Agent</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <aside>
+      <div class="brand"><span class="brand-mark">C</span><div><strong>OpenCNC</strong><small>Local Agent</small></div></div>
+      <nav>
+        <button class="active" data-nav="status">Status</button>
+        <button data-nav="jobs">Recent jobs</button>
+        <button data-nav="errors">Errors</button>
+        <button data-nav="settings">Settings</button>
+      </nav>
+      <button class="quiet" id="open-opencnc">Open OpenCNC</button>
+    </aside>
+    <main>
+      <div id="error-banner" class="error-banner" hidden></div>
+      <section data-view="status">
+        <p class="eyebrow">AUTOMATION STATUS</p>
+        <div class="status-card">
+          <div id="status-dot" class="status-dot" data-mode="setup"></div>
+          <div><h1 id="status-mode">Starting</h1><p id="status-message">Loading local state…</p></div>
+        </div>
+        <div class="metrics"><article><span>Projects monitored</span><strong id="status-projects">0</strong></article><article><span>Next scan</span><strong id="status-next">—</strong></article></div>
+        <div class="actions"><button class="primary" id="run-now">Scan and convert now</button><button id="toggle-automation">Pause automation</button><button id="open-folder">Open monitored folder</button></div>
+        <div class="safety"><strong>Guarded production output</strong><p>OpenCNC writes only fully verified conversions. Existing BPP files are updated only when their checksum still matches the previous OpenCNC manifest. Vendor simulation remains required before machining.</p></div>
+      </section>
+      <section data-view="jobs" hidden>
+        <p class="eyebrow">LOCAL SQLITE HISTORY</p><h1>Recent jobs</h1>
+        <div class="table-wrap"><table><thead><tr><th>Project</th><th>Status</th><th>Sources</th><th>Outputs</th><th>Checksums</th><th>Time</th><th>Message</th></tr></thead><tbody id="jobs-body"></tbody></table><p id="empty-jobs" class="empty">No matching jobs yet.</p></div>
+      </section>
+      <section data-view="errors" hidden></section>
+      <section data-view="settings" hidden>
+        <p class="eyebrow">LOCAL WINDOWS CONFIGURATION</p><h1>Settings</h1>
+        <form id="settings-form">
+          <fieldset><legend>Workspace</legend>
+            <label>Parent projects folder<div class="joined"><input id="parent-folder" readonly /><button type="button" id="choose-folder">Choose…</button></div></label>
+            <label>Output folder name<input id="output-folder" required /></label>
+          </fieldset>
+          <fieldset><legend>Monitoring and retry</legend><div class="grid">
+            <label>Scan interval (seconds)<input id="scan-interval" type="number" min="2" max="3600" required /></label>
+            <label>Stable scans required<input id="stability-scans" type="number" min="1" max="100" required /></label>
+            <label>First retry (seconds)<input id="retry-initial" type="number" min="1" max="3600" required /></label>
+            <label>Maximum retry (seconds)<input id="retry-maximum" type="number" min="1" max="86400" required /></label>
+          </div></fieldset>
+          <fieldset><legend>Verification</legend>
+            <label>Machine profile<div class="joined"><input id="machine-profile" readonly placeholder="No profile selected" /><button type="button" id="choose-profile">Choose…</button><button type="button" id="clear-profile">Clear</button></div></label>
+            <label class="check"><input id="qa-enabled" type="checkbox" /> Generate QA PDF job sheets</label>
+          </fieldset>
+          <fieldset><legend>Agent behavior</legend>
+            <label class="check"><input id="automation-enabled" type="checkbox" /> Automation running</label>
+            <label class="check"><input id="auto-start" type="checkbox" /> Start after Windows login</label>
+            <label class="check"><input id="notify-success" type="checkbox" /> Notify for ordinary successful conversions</label>
+          </fieldset>
+          <div class="actions"><button class="primary" type="submit">Save settings</button><button type="button" id="open-data">Open data and logs folder</button><span id="save-confirmation"></span></div>
+        </form>
+      </section>
+    </main>
+    <script type="module" src="../../../dist/apps/windows-agent/src/renderer.js"></script>
+  </body>
+</html>

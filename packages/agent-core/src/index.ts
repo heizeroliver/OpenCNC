@@ -26,17 +26,58 @@ export interface AgentRetryPolicy {
 
 export interface AgentConfiguration {
   schemaVersion: "0.1";
+  automationEnabled: boolean;
   parentProjectsFolder: string;
   outputFolder: string;
   scanIntervalSeconds: number;
   stabilityScans: number;
   qaEnabled: boolean;
-  machineProfilePath?: string;
+  machineProfilePath?: string | undefined;
   autoStart: boolean;
   retryInitialSeconds: number;
   retryMaximumSeconds: number;
   notifyOnSuccess: boolean;
 }
+
+export const DEFAULT_AGENT_CONFIGURATION: AgentConfiguration = {
+  schemaVersion: "0.1",
+  automationEnabled: true,
+  parentProjectsFolder: "",
+  outputFolder: "BPP",
+  scanIntervalSeconds: 10,
+  stabilityScans: 2,
+  qaEnabled: false,
+  autoStart: false,
+  retryInitialSeconds: 5,
+  retryMaximumSeconds: 300,
+  notifyOnSuccess: false
+};
+
+export const normalizeAgentConfiguration = (value: Partial<AgentConfiguration> | undefined): AgentConfiguration => {
+  const normalized: AgentConfiguration = {
+    ...DEFAULT_AGENT_CONFIGURATION,
+    ...value,
+    schemaVersion: "0.1",
+    automationEnabled: value?.automationEnabled ?? DEFAULT_AGENT_CONFIGURATION.automationEnabled,
+    parentProjectsFolder: value?.parentProjectsFolder?.trim() ?? "",
+    outputFolder: value?.outputFolder?.trim() || DEFAULT_AGENT_CONFIGURATION.outputFolder
+  };
+  if (value?.machineProfilePath?.trim()) normalized.machineProfilePath = value.machineProfilePath.trim();
+  else delete normalized.machineProfilePath;
+  return normalized;
+};
+
+export const validateAgentConfiguration = (configuration: AgentConfiguration): string[] => {
+  const issues: string[] = [];
+  if (configuration.schemaVersion !== "0.1") issues.push("schemaVersion must be 0.1");
+  if (!configuration.outputFolder || configuration.outputFolder === "." || configuration.outputFolder === ".." || /[\\/:\u0000]/.test(configuration.outputFolder)) issues.push("outputFolder must be one plain folder name");
+  if (!Number.isFinite(configuration.scanIntervalSeconds) || configuration.scanIntervalSeconds < 2 || configuration.scanIntervalSeconds > 3_600) issues.push("scanIntervalSeconds must be between 2 and 3600");
+  if (!Number.isInteger(configuration.stabilityScans) || configuration.stabilityScans < 1 || configuration.stabilityScans > 100) issues.push("stabilityScans must be an integer between 1 and 100");
+  if (!Number.isFinite(configuration.retryInitialSeconds) || configuration.retryInitialSeconds < 1 || configuration.retryInitialSeconds > 3_600) issues.push("retryInitialSeconds must be between 1 and 3600");
+  if (!Number.isFinite(configuration.retryMaximumSeconds) || configuration.retryMaximumSeconds < configuration.retryInitialSeconds || configuration.retryMaximumSeconds > 86_400) issues.push("retryMaximumSeconds must be at least retryInitialSeconds and no more than 86400");
+  if (configuration.machineProfilePath !== undefined && !configuration.machineProfilePath.trim()) issues.push("machineProfilePath must be omitted or non-empty");
+  return issues;
+};
 
 export interface AgentJobHistoryRecord {
   id: string;
@@ -219,7 +260,7 @@ export class AgentAutomationCore<Project extends AgentCoreProject, Result extend
           await this.adapter.onEvent?.({ type: "blocked", project, result, retryCount: decision.retryCount, message: result.message });
         } else {
           this.controller.recordSuccess(key);
-          await this.adapter.onEvent?.({ type: "completed", project, result, retryCount: 0, message: result.message });
+          await this.adapter.onEvent?.({ type: "completed", project, result, retryCount: decision.retryCount, message: result.message });
         }
         processed.push({ project, result });
       } catch (error) {

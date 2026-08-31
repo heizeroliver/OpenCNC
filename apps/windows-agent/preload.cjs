@@ -1,0 +1,21 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+const subscribe = (channel, callback) => {
+  const listener = (_event, value) => callback(value);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+};
+
+contextBridge.exposeInMainWorld("opencncAgent", {
+  snapshot: () => ipcRenderer.invoke("agent:snapshot"),
+  chooseParentFolder: () => ipcRenderer.invoke("agent:choose-parent-folder"),
+  chooseMachineProfile: () => ipcRenderer.invoke("agent:choose-machine-profile"),
+  updateConfiguration: configuration => ipcRenderer.invoke("agent:update-configuration", configuration),
+  setAutomationEnabled: enabled => ipcRenderer.invoke("agent:set-enabled", enabled),
+  runNow: () => ipcRenderer.invoke("agent:run-now"),
+  openMonitoredFolder: () => ipcRenderer.invoke("agent:open-monitored-folder"),
+  openDataFolder: () => ipcRenderer.invoke("agent:open-data-folder"),
+  openOpenCnc: () => ipcRenderer.invoke("agent:open-opencnc"),
+  onState: callback => subscribe("agent:state", callback),
+  onNavigate: callback => subscribe("agent:navigate", callback)
+});

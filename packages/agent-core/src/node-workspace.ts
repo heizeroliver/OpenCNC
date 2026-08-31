@@ -45,6 +45,12 @@ export interface NodeWorkspaceProjectResult {
   orphanedOutputs: string[];
   outputDirectory: string;
   report?: BulkConversionReport;
+  sourceNames?: string[];
+  outputNames?: string[];
+  inputChecksums?: Record<string, string>;
+  outputChecksums?: Record<string, string>;
+  verified?: boolean;
+  reverseVerified?: boolean;
   message: string;
 }
 
@@ -163,9 +169,11 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
   if (sourceCollisions.length) return {
     projectName: project.name, status: "conflict", sourceCount: project.files.length, written: 0, updated: 0, unchanged: 0,
     conflicts: sourceCollisions.flatMap(collision => collision.names), orphanedOutputs: [], outputDirectory,
+    sourceNames: project.files.map(file => file.name), outputNames: [], inputChecksums: {}, outputChecksums: {}, verified: false, reverseVerified: false,
     message: `Windows case-insensitive source collision: ${sourceCollisions.map(collision => collision.names.join(" / ")).join("; ")}`
   };
   const sources = await Promise.all(project.files.map(async file => ({ ...file, sourceText: await readStableWorkspaceSource(file) })));
+  const inputChecksums = Object.fromEntries(await Promise.all(sources.map(async source => [source.name, await sha256Hex(source.sourceText)] as const)));
   const inputs = sources.map(source => {
     const document = parseCix(source.sourceText, source.name);
     document.diagnostics.push(...validateDocument(document));
@@ -175,12 +183,14 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
   const blocked = conversion.outputs.filter(item => item.status !== "converted" || item.contents === undefined || !item.verified || !item.reverseVerified || !item.supportedSemanticRoundTrip || !item.expandedGeometryRoundTrip);
   if (blocked.length) return {
     projectName: project.name, status: "blocked", sourceCount: sources.length, written: 0, updated: 0, unchanged: 0, conflicts: [], orphanedOutputs: [], outputDirectory,
-    report: conversion.report, message: `${blocked.length}/${conversion.outputs.length} conversion job(s) failed guarded conversion; nothing was written`
+    report: conversion.report, sourceNames: sources.map(source => source.name), outputNames: conversion.outputs.map(item => item.outputName), inputChecksums, outputChecksums: {}, verified: false, reverseVerified: false,
+    message: `${blocked.length}/${conversion.outputs.length} conversion job(s) failed guarded conversion; nothing was written`
   };
   const outputCollisions = caseInsensitiveNameCollisions(conversion.outputs.map(item => item.outputName));
   if (outputCollisions.length) return {
     projectName: project.name, status: "conflict", sourceCount: sources.length, written: 0, updated: 0, unchanged: 0,
     conflicts: outputCollisions.flatMap(collision => collision.names), orphanedOutputs: [], outputDirectory, report: conversion.report,
+    sourceNames: sources.map(source => source.name), outputNames: conversion.outputs.map(item => item.outputName), inputChecksums, outputChecksums: {}, verified: false, reverseVerified: false,
     message: `Windows case-insensitive BPP output collision: ${outputCollisions.map(collision => collision.names.join(" / ")).join("; ")}`
   };
 
@@ -203,7 +213,8 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
   }
   if (conflicts.length) return {
     projectName: project.name, status: "conflict", sourceCount: sources.length, written: 0, updated: 0, unchanged: plans.filter(plan => plan.decision === "unchanged").length,
-    conflicts, orphanedOutputs: [], outputDirectory, report: conversion.report, message: `${conflicts.length} BPP output(s) were edited or not created by OpenCNC; nothing was written`
+    conflicts, orphanedOutputs: [], outputDirectory, report: conversion.report, sourceNames: sources.map(source => source.name), outputNames: plans.map(plan => plan.item.outputName), inputChecksums, outputChecksums: {}, verified: false, reverseVerified: false,
+    message: `${conflicts.length} BPP output(s) were edited or not created by OpenCNC; nothing was written`
   };
 
   await mkdir(outputDirectory, { recursive: true });
@@ -212,7 +223,7 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
   for (const plan of plans) {
     if (plan.decision !== "unchanged") await atomicWorkspaceWrite(join(outputDirectory, plan.item.outputName), plan.item.contents!);
     for (const source of plan.sources) manifestEntries.push({
-      name: source.name, size: source.size, lastModified: source.lastModified, sourceChecksum: await sha256Hex(source.sourceText), outputName: plan.item.outputName,
+      name: source.name, size: source.size, lastModified: source.lastModified, sourceChecksum: inputChecksums[source.name]!, outputName: plan.item.outputName,
       targetChecksum: plan.targetChecksum, convertedAt: now, verified: true, reverseVerified: true, semanticRoundTrip: true, geometryRoundTrip: true
     });
   }
@@ -241,6 +252,8 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
   const unchanged = plans.filter(plan => plan.decision === "unchanged").length;
   return {
     projectName: project.name, status: written || updated ? "converted" : "unchanged", sourceCount: sources.length, written, updated, unchanged, conflicts: [], orphanedOutputs, outputDirectory, report,
+    sourceNames: sources.map(source => source.name), outputNames: plans.map(plan => plan.item.outputName), inputChecksums,
+    outputChecksums: Object.fromEntries(plans.map(plan => [plan.item.outputName, plan.targetChecksum])), verified: true, reverseVerified: true,
     message: written || updated ? `${written} new, ${updated} updated, ${unchanged} unchanged` : `${unchanged} output(s) already current`
   };
 }

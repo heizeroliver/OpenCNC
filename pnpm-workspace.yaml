@@ -5,4 +5,7 @@ onlyBuiltDependencies:
   - esbuild
 confirmModulesPurge: false
 allowBuilds:
+  electron-winstaller: false
   esbuild: true
+minimumReleaseAgeExclude:
+  - electron@44.1.0
