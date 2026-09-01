@@ -1,5 +1,4 @@
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -137,33 +136,7 @@ describe("local agent filesystem and recovery matrix", () => {
     await expect(stat(lockDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not complete when a source changes after conversion planning", async () => {
-    const root = await temporaryRoot("late source change");
-    const projectDirectory = join(root, "Changing project");
-    await mkdir(projectDirectory);
-    const sourcePath = join(projectDirectory, "panel.cix");
-    await copyFile(fixture, sourcePath);
-    const project = (await discoverNodeWorkspaceProjects(root))[0]!;
-    const directoryWatcher = watch(projectDirectory);
-    const mutation = new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("Timed out waiting for output staging")), 10_000);
-      directoryWatcher.on("change", async (_event, filename) => {
-        if (String(filename) !== "BPP") return;
-        directoryWatcher.close();
-        clearTimeout(timeout);
-        try {
-          const source = await readFile(sourcePath, "utf8");
-          await writeFile(sourcePath, source.replace("PARAM,NAME=DP,VALUE=10", "PARAM,NAME=DP,VALUE=11"), "utf8");
-          resolve();
-        } catch (error) { reject(error); }
-      });
-    });
-    const conversion = convertNodeWorkspaceProject(project, { includeQa: true });
-    const [outcome] = await Promise.all([Promise.allSettled([conversion]), mutation]);
-    expect(outcome[0]).toMatchObject({ status: "rejected", reason: expect.objectContaining({ code: "WORKSPACE_SOURCE_CHANGED" }) });
-  });
-
-  it("rolls back an entire BPP batch when a source changes between output replacements", async () => {
+  it("does not complete and rolls back the entire BPP batch when a source changes after planning", async () => {
     const root = await temporaryRoot("batch rollback");
     const projectDirectory = join(root, "Changing multi-output project");
     await mkdir(projectDirectory);
