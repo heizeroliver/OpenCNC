@@ -3,10 +3,12 @@ productName: OpenCNC Local Agent
 copyright: Copyright © 2026 OpenCNC contributors
 asar: true
 npmRebuild: false
+executableName: OpenCNC Local Agent
 directories:
   output: release
 files:
   - dist/**/*
+  - apps/viewer/dist/**/*
   - apps/windows-agent/preload.cjs
   - apps/windows-agent/ui/**/*
   - package.json
@@ -21,6 +23,7 @@ win:
 mac:
   icon: build-resources/icon.png
 nsis:
+  include: build-resources/installer.nsh
   oneClick: false
   perMachine: false
   allowElevation: true

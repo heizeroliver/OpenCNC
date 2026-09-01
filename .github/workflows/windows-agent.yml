@@ -3,18 +3,21 @@ name: Windows Local Agent
 on:
   workflow_dispatch:
   push:
-    branches: [main, feature/windows-local-agent]
+    branches: [main, feature/windows-local-agent, release/windows-agent-rc1]
+    tags: [windows-agent-v*]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  test-and-package:
+  test-package-install-upgrade:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v6
         with:
           version: 11.19.0
@@ -23,18 +26,147 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod
       - run: pnpm check
       - run: pnpm test
-      - run: pnpm agent:package:win
-      - name: Verify installer
+      - name: Build current Windows installer
+        run: pnpm agent:package:win
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      - name: Verify identity, installer, checksum, and signature state
+        id: integrity
         shell: pwsh
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
         run: |
+          $build = Get-Content "dist/build-info.json" -Raw | ConvertFrom-Json
+          if ($build.commit -ne $env:GITHUB_SHA) { throw "Packaged commit $($build.commit) does not match GITHUB_SHA $env:GITHUB_SHA" }
+          if ($build.dirty -ne $false) { throw "Release build unexpectedly reports a dirty checkout" }
+          node scripts/verify-packaged-asar.mjs "release/win-unpacked/resources/app.asar" $env:GITHUB_SHA
           $installer = Get-Item "release/OpenCNC-Local-Agent-Setup.exe"
           if ($installer.Length -lt 1MB) { throw "Installer is unexpectedly small" }
-          Get-FileHash $installer.FullName -Algorithm SHA256
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content "release/SHA256SUMS.txt" -Encoding ascii
+          $signature = Get-AuthenticodeSignature $installer.FullName
+          if ($env:WIN_CSC_LINK -and $signature.Status -ne "Valid") { throw "Signing credentials were supplied but installer signature is $($signature.Status): $($signature.StatusMessage)" }
+          New-Item "release/ci" -ItemType Directory -Force | Out-Null
+          @(
+            "commit=$env:GITHUB_SHA"
+            "ref=$env:GITHUB_REF_NAME"
+            "version=$($build.version)"
+            "installer=$($installer.Name)"
+            "size=$($installer.Length)"
+            "sha256=$hash"
+            "signature=$($signature.Status)"
+          ) | Set-Content "release/ci/build-integrity.txt" -Encoding utf8
+          "installer_size=$($installer.Length)" >> $env:GITHUB_OUTPUT
+          "installer_sha256=$hash" >> $env:GITHUB_OUTPUT
+      - name: Build feature-complete installer for upgrade test
+        shell: pwsh
+        run: |
+          $oldRoot = Join-Path $env:RUNNER_TEMP "opencnc-feature-complete"
+          git worktree add --detach $oldRoot windows-agent-feature-complete
+          Push-Location $oldRoot
+          try {
+            pnpm install --frozen-lockfile
+            pnpm agent:package:win
+            $oldInstaller = (Resolve-Path "release/OpenCNC-Local-Agent-Setup.exe").Path
+          } finally {
+            Pop-Location
+          }
+          "OLD_INSTALLER=$oldInstaller" >> $env:GITHUB_ENV
+      - name: Install feature-complete build and prepare persisted upgrade state
+        shell: pwsh
+        run: |
+          $install = Start-Process $env:OLD_INSTALLER -ArgumentList "/S" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Feature-complete installer exited $($install.ExitCode)" }
+          $programs = Join-Path $env:LOCALAPPDATA "Programs"
+          $executable = Get-ChildItem $programs -Filter "OpenCNC Local Agent.exe" -File -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $executable) { throw "Installed feature-complete executable was not found" }
+          $agent = Start-Process $executable.FullName -ArgumentList "--hidden" -PassThru
+          $userData = Join-Path $env:APPDATA "OpenCNC Local Agent"
+          $database = Join-Path $userData "opencnc-agent.sqlite"
+          for ($attempt = 0; $attempt -lt 60 -and -not (Test-Path $database); $attempt += 1) { Start-Sleep -Milliseconds 500 }
+          if (-not (Test-Path $database)) { throw "Feature-complete app did not initialize its database at $database" }
+          if (-not $agent.HasExited) { $agent.Kill($true); if (-not $agent.WaitForExit(10000)) { throw "Feature-complete app did not stop" } }
+          node scripts/agent-upgrade-fixture.mjs prepare $database
+          "preserve me across upgrade and uninstall" | Set-Content (Join-Path $userData "upgrade-sentinel.txt") -Encoding utf8
+          "INSTALL_EXE=$($executable.FullName)" >> $env:GITHUB_ENV
+          "AGENT_USER_DATA=$userData" >> $env:GITHUB_ENV
+          "AGENT_DATABASE=$database" >> $env:GITHUB_ENV
+      - name: Upgrade in place and run installed application smoke test
+        shell: pwsh
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+        run: |
+          $install = Start-Process "release/OpenCNC-Local-Agent-Setup.exe" -ArgumentList "/S" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Current installer exited $($install.ExitCode)" }
+          if (-not (Test-Path $env:INSTALL_EXE)) { throw "Application executable is missing after upgrade" }
+          $resources = Join-Path (Split-Path $env:INSTALL_EXE) "resources"
+          if (-not (Test-Path (Join-Path $resources "app.asar"))) { throw "Packaged app.asar is missing" }
+          $smoke = Start-Process $env:INSTALL_EXE -ArgumentList "--smoke-test" -PassThru
+          if (-not $smoke.WaitForExit(30000)) { $smoke.Kill(); throw "Installed smoke test timed out" }
+          if ($smoke.ExitCode -ne 0) { throw "Installed smoke test exited $($smoke.ExitCode)" }
+          node scripts/agent-upgrade-fixture.mjs verify $env:AGENT_DATABASE
+          $sentinel = Join-Path $env:AGENT_USER_DATA "upgrade-sentinel.txt"
+          if ((Get-Content $sentinel -Raw).Trim() -ne "preserve me across upgrade and uninstall") { throw "Upgrade did not preserve the user-data sentinel" }
+          $installedSignature = Get-AuthenticodeSignature $env:INSTALL_EXE
+          if ($env:WIN_CSC_LINK -and $installedSignature.Status -ne "Valid") { throw "Signing credentials were supplied but installed executable signature is $($installedSignature.Status)" }
+          Copy-Item (Join-Path $env:AGENT_USER_DATA "opencnc-agent.log") "release/ci/installed-smoke.log"
+          @(
+            "feature_complete_install=PASS"
+            "upgrade_install=PASS"
+            "packaged_asar=PASS"
+            "installed_smoke=PASS"
+            "configuration_migration=PASS"
+            "retry_state_migration=PASS"
+            "job_history_migration=PASS"
+            "installed_signature=$($installedSignature.Status)"
+          ) | Set-Content "release/ci/install-validation.txt" -Encoding utf8
+      - name: Uninstall and verify binary removal and data preservation
+        shell: pwsh
+        run: |
+          $installDirectory = Split-Path $env:INSTALL_EXE
+          $uninstaller = Join-Path $installDirectory "Uninstall OpenCNC Local Agent.exe"
+          if (-not (Test-Path $uninstaller)) { throw "Uninstaller was not found" }
+          $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+          New-Item $runKey -Force | Out-Null
+          New-ItemProperty $runKey -Name "OpenCNC Local Agent" -Value "`"$env:INSTALL_EXE`" --hidden" -PropertyType String -Force | Out-Null
+          $uninstall = Start-Process $uninstaller -ArgumentList "/S" -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited $($uninstall.ExitCode)" }
+          for ($attempt = 0; $attempt -lt 30 -and (Test-Path $env:INSTALL_EXE); $attempt += 1) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path $env:INSTALL_EXE) { throw "Application executable remains after uninstall" }
+          if (Get-ItemProperty $runKey -Name "OpenCNC Local Agent" -ErrorAction SilentlyContinue) { throw "Windows startup entry remains after uninstall" }
+          if (-not (Test-Path $env:AGENT_DATABASE)) { throw "Uninstall unexpectedly deleted the history database" }
+          if (-not (Test-Path (Join-Path $env:AGENT_USER_DATA "upgrade-sentinel.txt"))) { throw "Uninstall unexpectedly deleted user data" }
+          @(
+            "uninstall=PASS"
+            "application_binaries_removed=PASS"
+            "startup_entry_removed=PASS"
+            "user_data_preserved=PASS"
+          ) | Add-Content "release/ci/install-validation.txt" -Encoding utf8
       - uses: actions/upload-artifact@v6
+        id: upload
         with:
-          name: OpenCNC-Windows-Installer
-          path: release/OpenCNC-Local-Agent-Setup.exe
+          name: OpenCNC-Windows-Installer-${{ github.sha }}
+          path: |
+            release/OpenCNC-Local-Agent-Setup.exe
+            release/SHA256SUMS.txt
+            release/ci/*.txt
+            release/ci/*.log
           if-no-files-found: error
           retention-days: 30
+      - name: Publish build summary
+        shell: pwsh
+        run: |
+          @"
+          ## OpenCNC Windows artifact
+
+          - Commit: ``$env:GITHUB_SHA``
+          - Ref: ``$env:GITHUB_REF_NAME``
+          - Installer: ``OpenCNC-Local-Agent-Setup.exe``
+          - Size: ``${{ steps.integrity.outputs.installer_size }}`` bytes
+          - SHA-256: ``${{ steps.integrity.outputs.installer_sha256 }}``
+          - Artifact: ${{ steps.upload.outputs.artifact-url }}
+          "@ >> $env:GITHUB_STEP_SUMMARY

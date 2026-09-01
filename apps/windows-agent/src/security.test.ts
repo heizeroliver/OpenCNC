@@ -19,7 +19,7 @@ describe("Windows Electron security posture", () => {
       source("apps/windows-agent/src/main.ts"),
       source("apps/windows-agent/preload.cjs")
     ]);
-    expect(main).toContain('parsed.protocol !== "https:" && parsed.protocol !== "http:"');
+    expect(main).toContain('parsed.protocol !== "https:"');
     expect(main).toContain("setWindowOpenHandler");
     expect(main).toContain("will-navigate");
     expect(main).toContain("assertAgentSender(event)");
@@ -39,5 +39,14 @@ describe("Windows Electron security posture", () => {
       expect(page).toContain("script-src 'self'");
       expect(page).toContain("object-src 'none'");
     }
+  });
+
+  it("loads and packages the production viewer from Vite's actual output directory", async () => {
+    const [main, builder] = await Promise.all([
+      source("apps/windows-agent/src/main.ts"),
+      source("electron-builder.yml")
+    ]);
+    expect(main).toContain('join(appRoot(), "apps", "viewer", "dist", "index.html")');
+    expect(builder).toContain("apps/viewer/dist/**/*");
   });
 });

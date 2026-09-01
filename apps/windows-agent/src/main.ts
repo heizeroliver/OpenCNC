@@ -110,7 +110,7 @@ const secureWindowOptions = () => ({
 const openExternalHttpUrl = (url: string): void => {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error(`Blocked external protocol ${parsed.protocol}`);
+    if (parsed.protocol !== "https:") throw new Error(`Blocked external protocol ${parsed.protocol}`);
     runBackground("Open external URL", shell.openExternal(parsed.toString()));
   } catch (error) {
     log("warning", "Blocked invalid external URL", { url, error: errorText(error) });
@@ -176,7 +176,7 @@ const openOpenCnc = (): void => {
   if (!viewerWindow || viewerWindow.isDestroyed()) {
     viewerWindow = new BrowserWindow({ ...secureWindowOptions(), width: 1360, height: 900, minWidth: 960, minHeight: 680, title: "OpenCNC" });
     installNavigationGuards(viewerWindow);
-    runBackground("Load OpenCNC viewer", viewerWindow.loadFile(join(appRoot(), "dist", "index.html")));
+    runBackground("Load OpenCNC viewer", viewerWindow.loadFile(join(appRoot(), "apps", "viewer", "dist", "index.html")));
     viewerWindow.on("closed", () => { viewerWindow = undefined; });
   }
   viewerWindow.show();

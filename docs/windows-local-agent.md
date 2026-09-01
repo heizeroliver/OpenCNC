@@ -11,12 +11,12 @@ The application runs in the Windows notification area (system tray), keeps its s
 The Windows build is produced by `.github/workflows/windows-agent.yml` on a real `windows-latest` GitHub runner.
 
 1. Open the repository's **Actions** page and select **Windows Local Agent**.
-2. Open the latest successful run for `main` or `feature/windows-local-agent`.
-3. Download the `OpenCNC-Windows-Installer` artifact.
+2. Open the latest successful run for the intended `release/windows-agent-rc1` commit or immutable `windows-agent-v*` tag.
+3. Download the commit-specific `OpenCNC-Windows-Installer-<commit>` artifact and compare the installer with its included `SHA256SUMS.txt`.
 4. Extract it and run `OpenCNC-Local-Agent-Setup.exe`.
 5. Follow the install wizard. It supports a per-user install, a selectable installation directory, Start Menu/Desktop shortcuts, and normal Windows uninstall.
 
-Development builds are not code-signed. Windows SmartScreen may therefore ask for confirmation. A production release should be Authenticode-signed before wide deployment.
+Unsigned validation builds may trigger Windows SmartScreen. The workflow accepts protected Authenticode credentials when available and records/verifies the signature state; see [Windows signing readiness](windows-code-signing.md). Do not treat an unsigned RC as a signed production release.
 
 ## First run and folder layout
 
@@ -45,7 +45,7 @@ The tray icon color and menu show one of these states:
 - **Warning** — a permanent guarded-conversion block or filename/manual-edit conflict needs attention.
 - **Error** — a temporary filesystem or monitored-folder failure will retry.
 
-The tray menu opens the full OpenCNC viewer or Local Agent dashboard, opens the monitored folder, pauses/resumes automation, runs an immediate scan, changes the folder, shows recent jobs/errors, opens settings, controls **Start with Windows**, or exits the process. Closing the window leaves the tray agent running; choose **Exit** from the tray to stop it completely.
+The tray menu opens the full OpenCNC viewer or Local Agent dashboard, opens the monitored folder or logs folder, pauses/resumes automation, runs an immediate scan, changes the folder, shows recent jobs/errors, opens settings, controls **Start with Windows**, or exits the process. Closing the window leaves the tray agent running; choose **Exit** from the tray to stop it completely. The dashboard footer shows the application version and source commit for artifact traceability.
 
 ## Settings
 
@@ -69,7 +69,7 @@ Thrown filesystem failures are temporary. This includes a locked source/output, 
 
 A missing/unavailable parent directory has its own bounded exponential backoff. Notifications are emitted on the first and third consecutive folder failure, then a recovery notification appears when the folder reconnects. Project failures notify on the first and third attempt, avoiding a notification on every poll.
 
-Retry observations are saved to SQLite after every scan. If Windows closes the process while a job is marked `converting`, startup marks that history entry as interrupted/retrying and safely reevaluates it. Atomic same-directory temporary-file replacement prevents a half-written BPP from becoming the production filename. Report and manifest files are written last.
+Retry observations are saved to SQLite after every scan. If Windows closes the process while a job is marked `converting`, startup marks that history entry as interrupted/retrying and safely reevaluates it. Each BPP batch is staged in the destination directory and flushed before replacement. The agent rechecks every source and expected existing output before each commit; a mid-batch failure rolls earlier replacements back and removes staging files. Report and manifest files are written last. A per-project atomic directory lock prevents two agent processes from writing the same project; its heartbeat makes a genuinely abandoned lock recoverable after ten minutes.
 
 ## Conflicts and manual BPP protection
 
@@ -83,7 +83,7 @@ If an operator or BiesseWorks has edited a generated BPP, OpenCNC leaves it unto
 
 ## Local history, database, and logs
 
-The dashboard reads local SQLite history containing job ID, project and fingerprint, source/output names, timestamps, lifecycle status, retry count, input/output SHA-256 values, QA flag, forward/reverse verification, and the last message. The database also stores configuration and serialized retry observations.
+The dashboard reads local SQLite history containing job ID, project and fingerprint, source/output names, timestamps, lifecycle status, retry count, input/output SHA-256 values, QA flag, forward/reverse verification, and the last message. The database also stores configuration and serialized retry observations. Schema migrations run in an immediate transaction and are tracked with SQLite `user_version`; startup runs `quick_check`. A newer unknown schema or corrupt/unreadable database stops startup explicitly and leaves the database bytes untouched for backup/recovery. OpenCNC never silently deletes a damaged history database.
 
 By default, Electron stores these under:
 
@@ -96,7 +96,15 @@ By default, Electron stores these under:
   opencnc-agent.log.previous
 ```
 
-Use **Settings → Open data and logs folder** to open the actual location. Logs rotate at approximately 5 MB. Uninstall does not delete application data automatically, so history is not silently destroyed. Delete it manually only after making any desired backup and while the agent is exited.
+Use **Settings → Open data and logs folder** or **Tray → Open logs folder** to open the actual location. The active log rotates at approximately 5 MB and one previous log is retained, bounding normal diagnostic retention to roughly 10 MB. Job logging contains paths, transitions, retry counts, and checksums, but not CIX/BPP file contents. Completed/failed/conflict history is capped at the newest 10,000 terminal jobs; all unfinished jobs are retained for recovery. Uninstall does not delete application data automatically, so history is not silently destroyed.
+
+If startup reports database corruption or an unsupported newer schema, exit the agent, copy the SQLite file plus any `-wal`/`-shm` companions to a backup location, and provide those files with the rotated logs to a developer. Restore from a known backup or deliberately start with a new database only after the history/configuration recovery decision has been made; do not rename/delete the original merely to make the error disappear.
+
+## Electron security boundary
+
+Both application windows load only packaged local HTML/assets. Every renderer runs with context isolation, Node integration disabled, sandboxing and web security enabled, and a restrictive Content Security Policy. The preload exposes only the narrow Local Agent IPC methods; the main process validates the sender and configuration key/type boundary. Navigation is denied, new windows are denied, and only parsed HTTPS links may be delegated to the system browser. No remote scripts or webviews are loaded.
+
+The viewer deliberately retains its local File System Access workflow. Because its content is packaged and it needs a user-mediated directory picker, the app does not install a blanket permission-denial handler that would break that local capability. It never receives arbitrary filesystem access from web content: directory access still starts with an explicit user selection. `pnpm audit --prod` and the full dependency audit are part of release review; dependency upgrades are evaluated rather than applied automatically.
 
 ## Notifications
 
@@ -129,13 +137,13 @@ pnpm agent:package:win
 
 `pnpm agent:package:win` creates `release/OpenCNC-Local-Agent-Setup.exe`. `electron-builder.yml` defines an x64 assisted NSIS installer; Electron 44 bundles the application runtime. `release/` is generated and ignored by Git.
 
-The Windows workflow installs frozen dependencies, type-checks, runs the full test suite (including real Windows exclusive-lock and long-path tests), builds the installer, checks that it exists and is nontrivial, prints its SHA-256, and uploads it as `OpenCNC-Windows-Installer` for 30 days. macOS/Linux-compatible tests remain in the regular CI workflow.
+The Windows workflow performs a clean full-history checkout, frozen install, production dependency audit, type-check, full suite (including real Windows exclusive-lock and long-path tests), fresh installer build, embedded commit verification, post-signing SHA-256 generation, and artifact upload. It also builds the immutable feature-complete checkpoint, silently installs it, seeds persisted settings/retry/interrupted-job state, upgrades in place to the current build, runs the installed executable's smoke mode, verifies the SQLite migration and packaged ASAR, then silently uninstalls. The test requires binaries and the login-start registry value to be removed while history/log/user data remain preserved.
 
 ## Verification boundary
 
 Automated cross-platform tests cover stable/partial/changing exports, manual output edits, atomic replacement, persistent retries, interrupted jobs, deleted/renamed projects, multiple projects, empty folders, Unicode/case collisions, spaces, simulated parent-share loss/reconnect, and injected transient I/O failures. Windows CI additionally exercises a path beyond the legacy 260-character limit and real exclusive locks on both CIX and BPP files.
 
-The following still require the real CNC Windows computer: login startup across an actual logout/reboot; tray/notification UX under that computer's policy; the real exporter timing pattern; the real network/share identity and reconnect behavior; antivirus/SmartScreen interaction; installer/uninstaller permissions; and BiesseWorks import/simulation of every resulting BPP. No automated test claims physical machine safety.
+The following still require the real CNC Windows computer: login startup across an actual logout/reboot; tray/notification UX under that computer's policy; the real exporter timing pattern; the real network/share identity and reconnect behavior; antivirus/SmartScreen interaction; installer/uninstaller permissions under the production account; and BiesseWorks import/simulation of every resulting BPP. Follow [the production-machine validation checklist](windows-production-validation.md). No automated test claims physical machine safety.
 
 ## Restore the pre-agent checkpoint
 

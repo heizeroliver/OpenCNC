@@ -18,6 +18,9 @@ importers:
         specifier: ^1.5.4
         version: 1.5.4
     devDependencies:
+      '@electron/asar':
+        specifier: 3.4.1
+        version: 3.4.1
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3

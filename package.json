@@ -23,6 +23,7 @@
     "agent:package:win": "pnpm agent:compile && electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@types/node": "^24.0.0",
     "@types/proper-lockfile": "4.1.4",
     "@types/qrcode": "^1.5.6",

@@ -66,6 +66,7 @@ Folder automation is stricter than a normal overwrite loop:
 5. A changed BPP can be updated only when its current SHA-256 equals the checksum in the previous OpenCNC manifest.
 6. A manually edited or unknown BPP creates a conflict and blocks the entire project write.
 7. If a CIX is removed, the old BPP is reported as orphaned but not deleted automatically.
-8. The manifest is written last, after the output and report writes succeed.
+8. All changed BPP files are durably staged as one guarded batch. Sources and expected existing-output checksums are rechecked before each replacement; a mid-batch error rolls prior replacements back.
+9. The manifest is written last, after the output and report writes succeed.
 
 These rules make repeated automatic conversion practical without treating the export folder as disposable. Generated BPP files remain interoperability drafts and must still be inspected and simulated in the machine vendor's software.
