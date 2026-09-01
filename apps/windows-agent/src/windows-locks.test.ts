@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { convertNodeWorkspaceProject, discoverNodeWorkspaceProjects } from "../../../packages/agent-core/src/node-workspace.js";
 
@@ -10,26 +11,36 @@ const locks: ChildProcessWithoutNullStreams[] = [];
 const fixture = join(process.cwd(), "fixtures", "synthetic", "minimal.cix");
 
 const acquireExclusiveWindowsLock = async (path: string): Promise<ChildProcessWithoutNullStreams> => {
-  const script = "$stream=[System.IO.File]::Open($env:OPENCNC_LOCK_PATH,[System.IO.FileMode]::Open,[System.IO.FileAccess]::ReadWrite,[System.IO.FileShare]::None); Write-Output 'LOCKED'; [Console]::Out.Flush(); Start-Sleep -Seconds 60";
+  const readyPath = join(tmpdir(), `opencnc-lock-ready-${randomUUID()}`);
+  const script = "$stream=[System.IO.File]::Open($env:OPENCNC_LOCK_PATH,[System.IO.FileMode]::Open,[System.IO.FileAccess]::ReadWrite,[System.IO.FileShare]::None); [System.IO.File]::WriteAllText($env:OPENCNC_LOCK_READY,'LOCKED'); Start-Sleep -Seconds 60";
   const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    env: { ...process.env, OPENCNC_LOCK_PATH: path },
+    env: { ...process.env, OPENCNC_LOCK_PATH: path, OPENCNC_LOCK_READY: readyPath },
     stdio: "pipe"
   });
   locks.push(child);
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out acquiring exclusive Windows file lock")), 10_000);
-    child.once("error", error => { clearTimeout(timeout); reject(error); });
-    child.stdout.on("data", chunk => {
-      if (!String(chunk).includes("LOCKED")) return;
-      clearTimeout(timeout);
-      resolve();
-    });
-    child.stderr.on("data", chunk => {
-      const message = String(chunk).trim();
-      if (message) { clearTimeout(timeout); reject(new Error(message)); }
-    });
-  });
-  return child;
+  let spawnError: Error | undefined;
+  let stderr = "";
+  child.once("error", error => { spawnError = error; });
+  child.stderr.on("data", chunk => { stderr += String(chunk); });
+
+  try {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (spawnError) throw spawnError;
+      if (child.exitCode !== null) {
+        throw new Error(`Windows lock helper exited with code ${child.exitCode}: ${stderr.trim() || "no diagnostic output"}`);
+      }
+      try {
+        if ((await readFile(readyPath, "utf8")) === "LOCKED") return child;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error(`Timed out acquiring exclusive Windows file lock: ${stderr.trim() || "helper produced no diagnostic output"}`);
+  } finally {
+    await rm(readyPath, { force: true });
+  }
 };
 
 const releaseLock = async (child: ChildProcessWithoutNullStreams): Promise<void> => {
@@ -45,7 +56,7 @@ afterEach(async () => {
 });
 
 describe.runIf(process.platform === "win32")("real Windows exclusive-lock recovery", () => {
-  it("retries safely after exclusive CIX and BPP locks are released", { timeout: 30_000 }, async () => {
+  it("retries safely after exclusive CIX and BPP locks are released", { timeout: 90_000 }, async () => {
     const root = await mkdtemp(join(tmpdir(), "opencnc windows lock "));
     roots.push(root);
     const projectDirectory = join(root, "Locked project");
