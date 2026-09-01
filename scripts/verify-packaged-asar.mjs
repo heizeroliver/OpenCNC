@@ -3,7 +3,7 @@ import { extractFile, listPackage } from "@electron/asar";
 const [archivePath, expectedCommit] = process.argv.slice(2);
 if (!archivePath || !expectedCommit) throw new Error("Usage: node scripts/verify-packaged-asar.mjs <app.asar> <expected-commit>");
 
-const files = new Set(listPackage(archivePath, { isPack: false }));
+const files = new Set(listPackage(archivePath, { isPack: false }).map(path => path.replaceAll("\\", "/")));
 const required = [
   "/apps/viewer/dist/index.html",
   "/apps/windows-agent/preload.cjs",
