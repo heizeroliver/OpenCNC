@@ -110,7 +110,15 @@ describe("Windows local agent service", () => {
     const jobs = await store.recentJobs(10);
     expect(attempts).toBe(2);
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]).toMatchObject({ status: "completed", retryCount: 1, inputChecksums: { "part.cix": "input-sha256" }, outputChecksums: { "part.bpp": "output-sha256" }, verified: true, reverseVerified: true });
+    expect(jobs[0]).toMatchObject({
+      status: "completed",
+      retryCount: 1,
+      outputDirectory: "C:\\CNC Projects\\Kitchen\\BPP",
+      inputChecksums: { "part.cix": "input-sha256" },
+      outputChecksums: { "part.bpp": "output-sha256" },
+      verified: true,
+      reverseVerified: true
+    });
     expect(harness.notifications.some(notification => notification.title.includes("recovered"))).toBe(true);
     await restarted.stop();
     harness.clear();

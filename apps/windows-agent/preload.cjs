@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("opencncAgent", {
   updateConfiguration: configuration => ipcRenderer.invoke("agent:update-configuration", configuration),
   setAutomationEnabled: enabled => ipcRenderer.invoke("agent:set-enabled", enabled),
   runNow: () => ipcRenderer.invoke("agent:run-now"),
+  openBppInBiesseWorks: jobId => ipcRenderer.invoke("agent:open-bpp-in-biesseworks", jobId),
   openMonitoredFolder: () => ipcRenderer.invoke("agent:open-monitored-folder"),
   openDataFolder: () => ipcRenderer.invoke("agent:open-data-folder"),
   openOpenCnc: () => ipcRenderer.invoke("agent:open-opencnc"),

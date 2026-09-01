@@ -9,6 +9,13 @@ interface AgentBuildInfo {
   dirty: boolean;
 }
 
+interface BiesseWorksOpenResult {
+  jobId: string;
+  projectName: string;
+  openedCount: number;
+  outputNames: string[];
+}
+
 interface OpenCncAgentApi {
   snapshot(): Promise<LocalAgentSnapshot>;
   about(): Promise<AgentBuildInfo>;
@@ -17,6 +24,7 @@ interface OpenCncAgentApi {
   updateConfiguration(configuration: Partial<AgentConfiguration>): Promise<AgentConfiguration>;
   setAutomationEnabled(enabled: boolean): Promise<void>;
   runNow(): Promise<LocalAgentSnapshot>;
+  openBppInBiesseWorks(jobId: string): Promise<BiesseWorksOpenResult>;
   openMonitoredFolder(): Promise<void>;
   openDataFolder(): Promise<void>;
   openOpenCnc(): Promise<void>;
@@ -86,6 +94,18 @@ const checksumSummary = (job: AgentJobHistoryRecord): string => {
   return `${input ? compactChecksum(input) : "—"} → ${output ? compactChecksum(output) : "—"}`;
 };
 
+const latestOpenableJob = (jobs: AgentJobHistoryRecord[]): AgentJobHistoryRecord | undefined => jobs
+  .filter(job => job.status === "completed" && job.verified === true && job.reverseVerified === true && Boolean(job.outputDirectory) && job.outputNames.length > 0)
+  .sort((left, right) => (right.completedAt ?? right.detectedAt).localeCompare(left.completedAt ?? left.detectedAt))[0];
+
+const renderBiesseWorksAction = (jobs: AgentJobHistoryRecord[]): void => {
+  const button = byId<HTMLButtonElement>("open-latest-bpp");
+  const job = latestOpenableJob(jobs);
+  button.disabled = !job;
+  button.textContent = job ? `Open in BiesseWorks: ${job.projectName} (${job.outputNames.length} BPP)` : "No verified BPP files yet";
+  button.title = job ? `Open the verified outputs from ${job.projectName}` : "Run a new verified CIX to BPP conversion first";
+};
+
 const renderJobs = (jobs: AgentJobHistoryRecord[]): void => {
   const filtered = currentView === "errors" ? jobs.filter(job => ["blocked", "conflicted", "failed", "retrying"].includes(job.status)) : jobs;
   jobsBody.replaceChildren();
@@ -100,6 +120,7 @@ const renderJobs = (jobs: AgentJobHistoryRecord[]): void => {
     row.dataset.status = job.status;
     jobsBody.append(row);
   }
+  renderBiesseWorksAction(jobs);
 };
 
 const navigate = (view: typeof currentView): void => {
@@ -130,6 +151,24 @@ byId("open-folder").addEventListener("click", () => { void window.opencncAgent.o
 byId("open-data").addEventListener("click", () => { void window.opencncAgent.openDataFolder(); });
 byId("open-opencnc").addEventListener("click", () => { void window.opencncAgent.openOpenCnc(); });
 byId("run-now").addEventListener("click", async () => { clearError(); try { snapshot = await window.opencncAgent.runNow(); renderState(snapshot.state); renderJobs(snapshot.recentJobs); } catch (error) { showError(error); } });
+byId("open-latest-bpp").addEventListener("click", async () => {
+  clearError();
+  const job = latestOpenableJob(snapshot.recentJobs);
+  if (!job) return;
+  const button = byId<HTMLButtonElement>("open-latest-bpp");
+  const confirmation = byId<HTMLElement>("biesseworks-confirmation");
+  button.disabled = true;
+  confirmation.textContent = "Opening BPP files…";
+  try {
+    const result = await window.opencncAgent.openBppInBiesseWorks(job.id);
+    confirmation.textContent = `Opened ${result.openedCount} file${result.openedCount === 1 ? "" : "s"} from ${result.projectName}`;
+  } catch (error) {
+    confirmation.textContent = "";
+    showError(error);
+  } finally {
+    renderBiesseWorksAction(snapshot.recentJobs);
+  }
+});
 byId("toggle-automation").addEventListener("click", async () => { clearError(); try { await window.opencncAgent.setAutomationEnabled(!snapshot.configuration.automationEnabled); await refresh(); } catch (error) { showError(error); } });
 
 form.addEventListener("submit", async event => {

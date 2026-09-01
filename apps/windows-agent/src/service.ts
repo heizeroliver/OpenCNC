@@ -289,6 +289,7 @@ export class LocalAgentService {
       retryCount: event.retryCount,
       sourceNames: result?.sourceNames ?? base.sourceNames,
       outputNames: result?.outputNames ?? base.outputNames,
+      ...(result?.outputDirectory ? { outputDirectory: result.outputDirectory } : {}),
       inputChecksums: result?.inputChecksums ?? base.inputChecksums,
       outputChecksums: result?.outputChecksums ?? base.outputChecksums,
       qaEnabled: this.configuration.qaEnabled,

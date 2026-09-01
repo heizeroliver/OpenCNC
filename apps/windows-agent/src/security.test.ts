@@ -49,4 +49,17 @@ describe("Windows Electron security posture", () => {
     expect(main).toContain('join(appRoot(), "apps", "viewer", "dist", "index.html")');
     expect(builder).toContain("apps/viewer/dist/**/*");
   });
+
+  it("opens BiesseWorks batches by persisted job ID rather than renderer-supplied paths", async () => {
+    const [main, preload, launcher] = await Promise.all([
+      source("apps/windows-agent/src/main.ts"),
+      source("apps/windows-agent/preload.cjs"),
+      source("apps/windows-agent/src/biesseworks.ts")
+    ]);
+    expect(preload).toContain('openBppInBiesseWorks: jobId => ipcRenderer.invoke("agent:open-bpp-in-biesseworks", jobId)');
+    expect(main).toContain('(await store.recentJobs(10_000)).find(record => record.id === jobId)');
+    expect(main).toContain('assertAgentSender(event); return openJobOutputsInBiesseWorks(jobId)');
+    expect(launcher).toContain('sha256(await read(output.path)) !== output.checksum');
+    expect(launcher).toContain('extname(name).toLowerCase() !== ".bpp"');
+  });
 });

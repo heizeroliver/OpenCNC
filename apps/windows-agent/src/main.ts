@@ -15,6 +15,7 @@ import {
 } from "electron";
 import type { AgentConfiguration, AgentJobHistoryRecord } from "../../../packages/agent-core/src/index.js";
 import { SqliteAgentStore } from "../../../packages/agent-core/src/sqlite-store.js";
+import { openVerifiedBppOutputs, type BiesseWorksOpenResult } from "./biesseworks.js";
 import { AgentFileLogger } from "./logging.js";
 import { LocalAgentService, type LocalAgentMode, type LocalAgentNotification, type LocalAgentState } from "./service.js";
 
@@ -205,6 +206,22 @@ const openPath = async (path: string | undefined): Promise<void> => {
   if (error) throw new Error(error);
 };
 
+const openJobOutputsInBiesseWorks = async (jobId: unknown): Promise<BiesseWorksOpenResult> => {
+  if (typeof jobId !== "string" || !jobId || jobId.length > 200) throw new Error("A valid conversion job ID is required");
+  if (!store) throw new Error("Agent history is not ready");
+  const job = (await store.recentJobs(10_000)).find(record => record.id === jobId);
+  if (!job) throw new Error("The selected conversion is no longer available in job history");
+  log("info", `Opening verified BPP batch in BiesseWorks: ${job.projectName}`, { jobId: job.id, outputNames: job.outputNames });
+  try {
+    const result = await openVerifiedBppOutputs(job, path => shell.openPath(path));
+    log("info", `Opened ${result.openedCount} BPP file(s) in BiesseWorks: ${job.projectName}`, { jobId: job.id, outputNames: result.outputNames });
+    return result;
+  } catch (error) {
+    log("warning", `Could not open BPP batch in BiesseWorks: ${job.projectName}`, { jobId: job.id, error: errorText(error) });
+    throw error;
+  }
+};
+
 const refreshTray = async (): Promise<void> => {
   if (!tray || !service) return;
   const snapshot = await service.snapshot(8);
@@ -311,6 +328,7 @@ const registerIpc = (): void => {
     await refreshTray();
   });
   ipcMain.handle("agent:run-now", async event => { assertAgentSender(event); await service!.runCycle(); return service!.snapshot(100); });
+  ipcMain.handle("agent:open-bpp-in-biesseworks", (event, jobId: unknown) => { assertAgentSender(event); return openJobOutputsInBiesseWorks(jobId); });
   ipcMain.handle("agent:open-monitored-folder", async event => { assertAgentSender(event); return openPath((await service!.snapshot(1)).configuration.parentProjectsFolder); });
   ipcMain.handle("agent:open-data-folder", event => { assertAgentSender(event); return openPath(app.getPath("userData")); });
   ipcMain.handle("agent:open-opencnc", event => { assertAgentSender(event); return openOpenCnc(); });

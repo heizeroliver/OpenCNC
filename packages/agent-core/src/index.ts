@@ -87,6 +87,7 @@ export interface AgentJobHistoryRecord {
   fingerprint: string;
   sourceNames: string[];
   outputNames: string[];
+  outputDirectory?: string;
   detectedAt: string;
   startedAt?: string;
   completedAt?: string;

@@ -63,7 +63,7 @@ For a watcher that works without keeping the browser open, double-click **`OpenC
 
 ### Windows Local Agent
 
-Download the commit-specific Windows installer artifact from the intended successful **Windows Local Agent** GitHub Actions run, verify `OpenCNC-Local-Agent-Setup.exe` against its included `SHA256SUMS.txt`, and run it. The installed application does not require Node.js, pnpm, a browser, or a source checkout. On first run, choose the parent directory containing the immediate CIX project folders. The agent waits for stable exports and converts every eligible project into its own `BPP` folder, even when the OpenCNC window is closed.
+Download the commit-specific Windows installer artifact from the intended successful **Windows Local Agent** GitHub Actions run, verify `OpenCNC-Local-Agent-Setup.exe` against its included `SHA256SUMS.txt`, and run it. The installed application does not require Node.js, pnpm, Python, a browser, or a source checkout. On first run, choose the parent directory containing the immediate CIX project folders. The agent waits for stable exports and converts every eligible project into its own `BPP` folder, even when the OpenCNC window is closed. After a verified conversion, **Open in BiesseWorks: …** opens every output from the newest completed project in one click through Windows' registered `.bpp` application.
 
 See the complete [Windows Local Agent guide](docs/windows-local-agent.md) before putting it on a production CNC workstation.
 

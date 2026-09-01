@@ -116,13 +116,19 @@ If production uses only a local disk, mark this section N/A and explain.
 
 Use known, non-production parts only.
 
-1. Import each generated BPP into the actual BiesseWorks version. Confirm it parses with no unexpected repair or dropped module.
+1. Associate `.bpp` with the installed BiesseWorks version, complete a multi-output test conversion, and click **Open in BiesseWorks: …**. Confirm every output from the newest completed job opens and no unrelated/older BPP opens.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
-2. Inspect panel dimensions, face/origin, drills, routes/arcs, depths, diameters, tools, repeated operations, and operation ordering against the source/design.
+2. Temporarily remove/change the association or copy the outputs to a safe test account without it. Confirm OpenCNC reports the launch failure rather than claiming the files opened.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
-3. For an `_f0`/`_f1` pair, verify the single merged BPP and the exact operator-reposition `WAIT` boundary.
+3. Modify one disposable generated BPP after conversion and click the button. Confirm checksum validation blocks the entire launch batch; then restore/reconvert it.
+   Result: [ ] PASS [ ] FAIL — Notes: ____________________
+4. Import each generated BPP into the actual BiesseWorks version. Confirm it parses with no unexpected repair or dropped module.
+   Result: [ ] PASS [ ] FAIL — Notes: ____________________
+5. Inspect panel dimensions, face/origin, drills, routes/arcs, depths, diameters, tools, repeated operations, and operation ordering against the source/design.
+   Result: [ ] PASS [ ] FAIL — Notes: ____________________
+6. For an `_f0`/`_f1` pair, verify the single merged BPP and the exact operator-reposition `WAIT` boundary.
    Result: [ ] PASS [ ] FAIL [ ] N/A — Notes: ____________________
-4. Run BiesseWorks simulation and compare the expected geometry/tooling with a trusted reference export.
+7. Run BiesseWorks simulation and compare the expected geometry/tooling with a trusted reference export.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
 
 ## J. CNC safety gate

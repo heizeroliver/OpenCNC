@@ -35,6 +35,14 @@ Only top-level `.cix` files in the parent itself or its immediate project direct
 
 The agent requires two identical scans by default. The fingerprint contains case-normalized filename, byte size, and modification time. A file is also checked after it is read; if it changed during the read, the attempt fails temporarily and retries instead of converting a partial export.
 
+## Open the converted batch in BiesseWorks
+
+Associate `.bpp` files with BiesseWorks in Windows once, the same way used when double-clicking a BPP in File Explorer. After a project completes guarded conversion, the status screen enables **Open in BiesseWorks: …**. One click opens every BPP recorded by the newest completed conversion job; a project containing many CIX exports therefore opens its whole generated BPP batch without selecting files individually.
+
+The renderer sends only the persisted job ID. The Electron main process resolves the recorded output directory and names, requires the job to be completed with forward and reverse verification, rejects path traversal or non-BPP names, confirms every file is regular, and recomputes every SHA-256 before launching anything. If any output is missing or changed, none of the batch is launched. Windows then opens each verified file through its registered `.bpp` application. OpenCNC does not automate BiesseWorks controls, start a simulation, or send a program to a CNC.
+
+If Windows reports that no application is associated, right-click a known test `.bpp` in File Explorer, choose **Open with**, select BiesseWorks, and enable the option to always use that application. Convert the project again if the dashboard says its job predates launch tracking.
+
 ## Tray controls
 
 The tray icon color and menu show one of these states:
@@ -119,6 +127,9 @@ Notifications are intentionally limited to conflicts, blocked conversions, first
 - **Locked-file retries:** close the exporter/vendor program if it holds an exclusive lock. OpenCNC will continue from persisted retry state.
 - **Conflict:** open Errors/Recent jobs and inspect the message. Check case-only names, Unicode-equivalent names, and manually edited BPP files.
 - **Blocked conversion:** the converter could not prove all guarded round trips. No BPP was written; inspect the conversion report/source and add a verified format fixture before extending conversion support.
+- **BiesseWorks button is disabled:** complete a new verified CIX-to-BPP job with this application version first.
+- **BiesseWorks does not open:** confirm `.bpp` is associated with BiesseWorks for the installed Windows account. The dashboard reports any filenames Windows refused to open.
+- **BPP changed after conversion:** OpenCNC blocks the complete launch batch when its current checksum no longer matches the verified job. Review the edit or perform a fresh guarded conversion; the button never weakens overwrite protection.
 - **Machine profile error:** select a valid OpenCNC profile JSON or clear the profile.
 - **No notification:** verify Windows notification permissions. The dashboard and SQLite history remain authoritative.
 - **Stop completely:** use **Exit** in the tray menu. Closing only the window is intentional background behavior.

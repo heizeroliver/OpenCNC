@@ -28,7 +28,7 @@
           <div><h1 id="status-mode">Starting</h1><p id="status-message">Loading local state…</p></div>
         </div>
         <div class="metrics"><article><span>Projects monitored</span><strong id="status-projects">0</strong></article><article><span>Next scan</span><strong id="status-next">—</strong></article></div>
-        <div class="actions"><button class="primary" id="run-now">Scan and convert now</button><button id="toggle-automation">Pause automation</button><button id="open-folder">Open monitored folder</button></div>
+        <div class="actions"><button class="primary" id="run-now">Scan and convert now</button><button id="open-latest-bpp" disabled>No verified BPP files yet</button><button id="toggle-automation">Pause automation</button><button id="open-folder">Open monitored folder</button><span class="action-feedback" id="biesseworks-confirmation"></span></div>
         <div class="safety"><strong>Guarded production output</strong><p>OpenCNC writes only fully verified conversions. Existing BPP files are updated only when their checksum still matches the previous OpenCNC manifest. Vendor simulation remains required before machining.</p></div>
       </section>
       <section data-view="jobs" hidden>
