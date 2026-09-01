@@ -8,6 +8,7 @@ const subscribe = (channel, callback) => {
 
 contextBridge.exposeInMainWorld("opencncAgent", {
   snapshot: () => ipcRenderer.invoke("agent:snapshot"),
+  about: () => ipcRenderer.invoke("agent:about"),
   chooseParentFolder: () => ipcRenderer.invoke("agent:choose-parent-folder"),
   chooseMachineProfile: () => ipcRenderer.invoke("agent:choose-machine-profile"),
   updateConfiguration: configuration => ipcRenderer.invoke("agent:update-configuration", configuration),

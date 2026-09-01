@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <title>OpenCNC Local Agent</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -17,6 +17,7 @@
         <button data-nav="settings">Settings</button>
       </nav>
       <button class="quiet" id="open-opencnc">Open OpenCNC</button>
+      <div class="build-info"><span id="build-version">Version —</span><span id="build-commit">Commit —</span></div>
     </aside>
     <main>
       <div id="error-banner" class="error-banner" hidden></div>

@@ -40,6 +40,24 @@ describe("agent automation core", () => {
     expect(restored.observe("project", "fingerprint", 100)).toMatchObject({ attempt: true, retryCount: 1 });
   });
 
+  it("emits one terminal event for a conflicted project", async () => {
+    const project = { name: "Project A", fingerprint: "same", directory: "C:\\Project A" };
+    const events: string[] = [];
+    const core = new AgentAutomationCore<typeof project, AgentCoreProcessResult>(
+      new AgentAttemptController({ stabilityScans: 1 }),
+      {
+        discover: async () => [project],
+        projectKey: value => value.directory,
+        process: async () => ({ status: "conflict", message: "existing output was edited" }),
+        onEvent: event => { events.push(event.type); }
+      }
+    );
+
+    await core.runCycle(0);
+
+    expect(events).toEqual(["processing", "conflicted"]);
+  });
+
   it("caps exponential backoff", () => {
     expect([1, 2, 3, 4].map(retry => exponentialRetryDelay(retry, 100, 250))).toEqual([100, 200, 250, 250]);
   });

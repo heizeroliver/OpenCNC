@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { lock } from "proper-lockfile";
 import { bulkConvertAndVerify, type BulkConversionReport } from "../../converter/src/index.js";
 import { validateDocument } from "../../core/src/index.js";
 import { parseCix } from "../../parser-cix/src/index.js";
@@ -62,6 +63,9 @@ export interface NodeWorkspaceResult {
 
 export const NODE_WORKSPACE_MANIFEST_FILE = "opencnc-sync-manifest.json";
 export const NODE_WORKSPACE_REPORT_FILE = "opencnc-conversion-report.json";
+export const NODE_WORKSPACE_LOCK_DIRECTORY = ".opencnc-conversion.lock";
+const NODE_WORKSPACE_LOCK_STALE_MS = 10 * 60_000;
+const NODE_WORKSPACE_LOCK_UPDATE_MS = 30_000;
 
 const exists = async (path: string): Promise<boolean> => {
   try { await access(path); return true; }
@@ -75,7 +79,8 @@ const readOptional = async (path: string): Promise<string | undefined> => {
 
 export const validateOutputFolderName = (value: string): string => {
   const name = value.trim();
-  if (!name || name === "." || name === ".." || /[\\/:\u0000]/.test(name)) throw new Error("The output folder must be one plain folder name");
+  const reservedDevice = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(name);
+  if (!name || name === "." || name === ".." || /[<>:"/\\|?*\u0000-\u001f]/.test(name) || /[.]$/.test(name) || reservedDevice) throw new Error("The output folder must be one Windows-safe plain folder name");
   return name;
 };
 
@@ -125,6 +130,24 @@ const sourceFiles = async (directory: string): Promise<NodeWorkspaceProject["fil
   return files.sort((left, right) => left.name.localeCompare(right.name));
 };
 
+const workspaceSourceChangedError = (projectName: string, detail: string): Error & { code: string } => Object.assign(
+  new Error(`${projectName} changed during guarded conversion (${detail}); waiting for a stable export`),
+  { code: "WORKSPACE_SOURCE_CHANGED" }
+);
+
+export async function assertWorkspaceSourcesUnchanged(project: NodeWorkspaceProject, expectedChecksums: Record<string, string>): Promise<void> {
+  const currentFiles = await sourceFiles(project.directory);
+  const expectedNames = project.files.map(file => file.name.normalize("NFC")).sort((left, right) => left.localeCompare(right));
+  const currentNames = currentFiles.map(file => file.name.normalize("NFC")).sort((left, right) => left.localeCompare(right));
+  if (JSON.stringify(currentNames) !== JSON.stringify(expectedNames)) throw workspaceSourceChangedError(project.name, "the top-level CIX file set changed");
+  for (const file of currentFiles) {
+    const expectedFile = project.files.find(candidate => candidate.name === file.name);
+    if (!expectedFile || file.size !== expectedFile.size || file.lastModified !== expectedFile.lastModified) throw workspaceSourceChangedError(project.name, `${file.name} metadata changed`);
+    const sourceText = await readStableWorkspaceSource(file);
+    if (await sha256Hex(sourceText) !== expectedChecksums[file.name]) throw workspaceSourceChangedError(project.name, `${file.name} contents changed`);
+  }
+}
+
 export async function discoverNodeWorkspaceProjects(rootDirectory: string, projectFilter?: string): Promise<NodeWorkspaceProject[]> {
   const root = resolve(rootDirectory);
   const candidates: Array<{ name: string; directory: string }> = [];
@@ -145,16 +168,78 @@ export async function discoverNodeWorkspaceProjects(rootDirectory: string, proje
   return projects.sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export const atomicWorkspaceWrite = async (path: string, contents: string | Uint8Array): Promise<void> => {
-  const temporary = join(dirname(path), `.opencnc-${basename(path)}-${process.pid}-${randomUUID()}.tmp`);
+const removeIfPresent = async (path: string): Promise<void> => {
+  try { await unlink(path); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+};
+
+const writeDurableTemporary = async (path: string, contents: string | Uint8Array): Promise<void> => {
+  const handle = await open(path, "wx");
   try {
-    await writeFile(temporary, contents);
-    await rename(temporary, path);
+    await handle.writeFile(contents);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+};
+
+export interface AtomicWorkspaceBatchItem {
+  path: string;
+  contents?: string | Uint8Array;
+}
+
+export const atomicWorkspaceBatchWrite = async (
+  items: AtomicWorkspaceBatchItem[],
+  beforeCommit: (item: AtomicWorkspaceBatchItem, index: number) => void | Promise<void> = () => undefined
+): Promise<void> => {
+  const batchId = `${process.pid}-${randomUUID()}`;
+  const staged = items.map((item, index) => ({
+    ...item,
+    temporary: join(dirname(item.path), `.opencnc-${basename(item.path)}-${batchId}-${index}.tmp`),
+    backup: join(dirname(item.path), `.opencnc-${basename(item.path)}-${batchId}-${index}.backup.tmp`),
+    hadExisting: false,
+    committed: false
+  }));
+  try {
+    for (const item of staged) if (item.contents !== undefined) await writeDurableTemporary(item.temporary, item.contents);
+    for (let index = 0; index < staged.length; index += 1) {
+      const item = staged[index]!;
+      await beforeCommit(item, index);
+      if (item.contents === undefined) continue;
+      if (await exists(item.path)) {
+        await rename(item.path, item.backup);
+        item.hadExisting = true;
+      }
+      try {
+        await rename(item.temporary, item.path);
+        item.committed = true;
+      } catch (error) {
+        if (item.hadExisting) await rename(item.backup, item.path);
+        item.hadExisting = false;
+        throw error;
+      }
+    }
   } catch (error) {
-    try { await unlink(temporary); }
-    catch (cleanupError) { if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw new AggregateError([error, cleanupError], `Atomic write and temporary-file cleanup both failed for ${path}`); }
+    const cleanupErrors: unknown[] = [];
+    for (const item of [...staged].reverse()) {
+      try {
+        if (item.committed) await removeIfPresent(item.path);
+        if (item.hadExisting) await rename(item.backup, item.path);
+        await removeIfPresent(item.temporary);
+        await removeIfPresent(item.backup);
+      } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    }
+    if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], "BPP batch failed and could not be rolled back completely");
     throw error;
   }
+  for (const item of staged) {
+    await removeIfPresent(item.temporary);
+    await removeIfPresent(item.backup);
+  }
+};
+
+export const atomicWorkspaceWrite = async (path: string, contents: string | Uint8Array): Promise<void> => {
+  await atomicWorkspaceBatchWrite([{ path, contents }]);
 };
 
 const bppFiles = async (directory: string): Promise<string[]> => {
@@ -162,7 +247,12 @@ const bppFiles = async (directory: string): Promise<string[]> => {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
 };
 
-export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject, options: NodeWorkspaceConversionOptions = {}): Promise<NodeWorkspaceProjectResult> {
+async function convertLockedNodeWorkspaceProject(
+  project: NodeWorkspaceProject,
+  options: NodeWorkspaceConversionOptions,
+  assertLock: () => void
+): Promise<NodeWorkspaceProjectResult> {
+  assertLock();
   const outputFolder = validateOutputFolderName(options.outputFolder ?? "BPP");
   const outputDirectory = join(project.directory, outputFolder);
   const sourceCollisions = caseInsensitiveNameCollisions(project.files.map(file => file.name));
@@ -197,7 +287,7 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
   const previousManifest = parseWorkspaceManifest(await readOptional(join(outputDirectory, NODE_WORKSPACE_MANIFEST_FILE)));
   const previousBySource = new Map(previousManifest?.entries.map(entry => [entry.name.toLocaleLowerCase(), entry]) ?? []);
   const sourceByName = new Map(sources.map(source => [source.name.toLocaleLowerCase(), source]));
-  const plans: Array<{ sources: (typeof sources); item: (typeof conversion.outputs)[number]; targetChecksum: string; decision: WorkspaceWriteDecision }> = [];
+  const plans: Array<{ sources: (typeof sources); item: (typeof conversion.outputs)[number]; targetChecksum: string; existingChecksum?: string; decision: WorkspaceWriteDecision }> = [];
   const conflicts: string[] = [];
   for (const item of conversion.outputs) {
     const itemSources = item.sourceNames.map(name => sourceByName.get(name.toLocaleLowerCase())).filter((source): source is (typeof sources)[number] => Boolean(source));
@@ -209,7 +299,7 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
     const targetChecksum = await sha256Hex(item.contents!);
     const decision = planWorkspaceWrite({ outputName: item.outputName, targetChecksum, ...(existingChecksum ? { existingChecksum } : {}), ...(previousEntry ? { previousEntry } : {}) });
     if (decision === "conflict") conflicts.push(item.outputName);
-    plans.push({ sources: itemSources, item, targetChecksum, decision });
+    plans.push({ sources: itemSources, item, targetChecksum, ...(existingChecksum ? { existingChecksum } : {}), decision });
   }
   if (conflicts.length) return {
     projectName: project.name, status: "conflict", sourceCount: sources.length, written: 0, updated: 0, unchanged: plans.filter(plan => plan.decision === "unchanged").length,
@@ -221,11 +311,36 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
   const now = new Date().toISOString();
   const manifestEntries: WorkspaceManifestEntry[] = [];
   for (const plan of plans) {
-    if (plan.decision !== "unchanged") await atomicWorkspaceWrite(join(outputDirectory, plan.item.outputName), plan.item.contents!);
     for (const source of plan.sources) manifestEntries.push({
       name: source.name, size: source.size, lastModified: source.lastModified, sourceChecksum: inputChecksums[source.name]!, outputName: plan.item.outputName,
       targetChecksum: plan.targetChecksum, convertedAt: now, verified: true, reverseVerified: true, semanticRoundTrip: true, geometryRoundTrip: true
     });
+  }
+  const outputChanged = (name: string): Error & { code: string } => Object.assign(
+    new Error(`${name} changed after OpenCNC planned the guarded write; the entire BPP batch was rolled back`),
+    { code: "WORKSPACE_OUTPUT_CHANGED" }
+  );
+  try {
+    await atomicWorkspaceBatchWrite(plans.map(plan => ({
+      path: join(outputDirectory, plan.item.outputName),
+      ...(plan.decision === "unchanged" ? {} : { contents: plan.item.contents! })
+    })), async (_item, index) => {
+      assertLock();
+      await assertWorkspaceSourcesUnchanged(project, inputChecksums);
+      const plan = plans[index]!;
+      const currentChecksum = await exists(join(outputDirectory, plan.item.outputName))
+        ? await sha256Hex(new Uint8Array(await readFile(join(outputDirectory, plan.item.outputName))))
+        : undefined;
+      if (currentChecksum !== plan.existingChecksum) throw outputChanged(plan.item.outputName);
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "WORKSPACE_OUTPUT_CHANGED") throw error;
+    return {
+      projectName: project.name, status: "conflict", sourceCount: sources.length, written: 0, updated: 0, unchanged: 0,
+      conflicts: plans.map(plan => plan.item.outputName), orphanedOutputs: [], outputDirectory, report: conversion.report,
+      sourceNames: sources.map(source => source.name), outputNames: plans.map(plan => plan.item.outputName), inputChecksums, outputChecksums: {}, verified: false, reverseVerified: false,
+      message: (error as Error).message
+    };
   }
   const qaArtifacts = options.includeQa ? await (async () => {
     const qaDirectory = join(outputDirectory, "QA");
@@ -233,6 +348,8 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
     return Promise.all(conversion.outputs.map(async item => {
       const itemSources = item.sourceNames.map(name => sourceByName.get(name.toLocaleLowerCase()))!;
       const qa = await generateQaJobSheet({ item, sourceDocument: item.sourceDocument, sourceText: itemSources.map(source => source!.sourceText).join("\r\n; OPENCNC TWO-SIDED SOURCE BOUNDARY\r\n") });
+      assertLock();
+      await assertWorkspaceSourcesUnchanged(project, inputChecksums);
       await atomicWorkspaceWrite(join(qaDirectory, qa.filename), qa.bytes);
       return { sourceNames: item.sourceNames, outputName: item.outputName, pdfName: `QA/${qa.filename}`, reportId: qa.reportId, fidelityGrade: qa.fidelityGrade, sourceChecksum: qa.sourceChecksum, targetChecksum: qa.targetChecksum };
     }));
@@ -245,7 +362,11 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
     workspace: { projectName: project.name, sourceDirectory: project.directory, outputDirectory, orphanedOutputs, safety: "existing outputs are overwritten only when their checksum matches the previous OpenCNC manifest" },
     qaArtifacts
   };
+  assertLock();
+  await assertWorkspaceSourcesUnchanged(project, inputChecksums);
   await atomicWorkspaceWrite(join(outputDirectory, NODE_WORKSPACE_REPORT_FILE), `${JSON.stringify(report, null, 2)}\n`);
+  assertLock();
+  await assertWorkspaceSourcesUnchanged(project, inputChecksums);
   await atomicWorkspaceWrite(join(outputDirectory, NODE_WORKSPACE_MANIFEST_FILE), `${JSON.stringify(createWorkspaceManifest(project.name, manifestEntries, now), null, 2)}\n`);
   const written = plans.filter(plan => plan.decision === "create").length;
   const updated = plans.filter(plan => plan.decision === "update").length;
@@ -256,6 +377,35 @@ export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject,
     outputChecksums: Object.fromEntries(plans.map(plan => [plan.item.outputName, plan.targetChecksum])), verified: true, reverseVerified: true,
     message: written || updated ? `${written} new, ${updated} updated, ${unchanged} unchanged` : `${unchanged} output(s) already current`
   };
+}
+
+export async function convertNodeWorkspaceProject(project: NodeWorkspaceProject, options: NodeWorkspaceConversionOptions = {}): Promise<NodeWorkspaceProjectResult> {
+  const lockfilePath = join(project.directory, NODE_WORKSPACE_LOCK_DIRECTORY);
+  let compromised: Error | undefined;
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await lock(project.directory, {
+      realpath: false,
+      lockfilePath,
+      stale: NODE_WORKSPACE_LOCK_STALE_MS,
+      update: NODE_WORKSPACE_LOCK_UPDATE_MS,
+      retries: 0,
+      onCompromised: error => { compromised = error; }
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOCKED") {
+      throw Object.assign(new Error(`${project.name} is already being converted by another OpenCNC process`), { code: "WORKSPACE_PROJECT_BUSY", cause: error });
+    }
+    throw error;
+  }
+  const assertLock = (): void => {
+    if (compromised) throw Object.assign(new Error(`${project.name} conversion lock was lost; production writes were stopped`), { code: "WORKSPACE_PROJECT_LOCK_COMPROMISED", cause: compromised });
+  };
+  try {
+    return await convertLockedNodeWorkspaceProject(project, options, assertLock);
+  } finally {
+    await release();
+  }
 }
 
 export async function runNodeWorkspaceOnce(options: NodeWorkspaceOptions): Promise<NodeWorkspaceResult> {

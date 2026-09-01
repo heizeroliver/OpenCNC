@@ -70,7 +70,8 @@ export const normalizeAgentConfiguration = (value: Partial<AgentConfiguration> |
 export const validateAgentConfiguration = (configuration: AgentConfiguration): string[] => {
   const issues: string[] = [];
   if (configuration.schemaVersion !== "0.1") issues.push("schemaVersion must be 0.1");
-  if (!configuration.outputFolder || configuration.outputFolder === "." || configuration.outputFolder === ".." || /[\\/:\u0000]/.test(configuration.outputFolder)) issues.push("outputFolder must be one plain folder name");
+  const reservedOutputDevice = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(configuration.outputFolder);
+  if (!configuration.outputFolder || configuration.outputFolder === "." || configuration.outputFolder === ".." || /[<>:"/\\|?*\u0000-\u001f]/.test(configuration.outputFolder) || /[.]$/.test(configuration.outputFolder) || reservedOutputDevice) issues.push("outputFolder must be one Windows-safe plain folder name");
   if (!Number.isFinite(configuration.scanIntervalSeconds) || configuration.scanIntervalSeconds < 2 || configuration.scanIntervalSeconds > 3_600) issues.push("scanIntervalSeconds must be between 2 and 3600");
   if (!Number.isInteger(configuration.stabilityScans) || configuration.stabilityScans < 1 || configuration.stabilityScans > 100) issues.push("stabilityScans must be an integer between 1 and 100");
   if (!Number.isFinite(configuration.retryInitialSeconds) || configuration.retryInitialSeconds < 1 || configuration.retryInitialSeconds > 3_600) issues.push("retryInitialSeconds must be between 1 and 3600");
@@ -112,6 +113,7 @@ export interface AgentRuntimeStore {
 export interface AgentHistoryStore {
   saveJob(record: AgentJobHistoryRecord): Promise<void>;
   recentJobs(limit: number): Promise<AgentJobHistoryRecord[]>;
+  unfinishedJobs(): Promise<AgentJobHistoryRecord[]>;
 }
 
 const DEFAULT_RETRY_POLICY: AgentRetryPolicy = { stabilityScans: 2, initialDelayMs: 5_000, maximumDelayMs: 5 * 60_000 };
@@ -216,6 +218,7 @@ export interface AgentCoreEvent<Project, Result> {
   type: "waiting" | "processing" | "completed" | "blocked" | "conflicted" | "retrying";
   project: Project;
   retryCount: number;
+  attemptStatus?: AgentAttemptStatus;
   result?: Result;
   message?: string;
   nextAttemptAt?: number;
@@ -246,7 +249,7 @@ export class AgentAutomationCore<Project extends AgentCoreProject, Result extend
       const key = this.adapter.projectKey(project);
       const decision = this.controller.observe(key, project.fingerprint, now);
       if (!decision.attempt) {
-        await this.adapter.onEvent?.({ type: "waiting", project, retryCount: decision.retryCount, ...(decision.nextAttemptAt !== undefined ? { nextAttemptAt: decision.nextAttemptAt } : {}) });
+        await this.adapter.onEvent?.({ type: "waiting", project, retryCount: decision.retryCount, attemptStatus: decision.status, ...(decision.nextAttemptAt !== undefined ? { nextAttemptAt: decision.nextAttemptAt } : {}) });
         continue;
       }
       await this.adapter.onEvent?.({ type: "processing", project, retryCount: decision.retryCount });

@@ -1,7 +1,7 @@
 {
   "name": "opencnc",
   "productName": "OpenCNC Local Agent",
-  "version": "0.2.0",
+  "version": "1.0.0-rc.1",
   "description": "Offline CIX/BPP conversion and guarded Windows workspace automation",
   "author": "OpenCNC contributors",
   "private": true,
@@ -17,13 +17,14 @@
     "viewer": "vite apps/viewer --host 127.0.0.1",
     "viewer:open": "vite apps/viewer --host 127.0.0.1 --open",
     "viewer:build": "vite build apps/viewer",
-    "agent:compile": "tsc -b && vite build apps/viewer",
+    "agent:compile": "node scripts/write-build-info.mjs && tsc -b && vite build apps/viewer",
     "agent:dev": "pnpm agent:compile && electron .",
     "agent:unpacked": "pnpm agent:compile && electron-builder --dir --publish never",
     "agent:package:win": "pnpm agent:compile && electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/proper-lockfile": "4.1.4",
     "@types/qrcode": "^1.5.6",
     "@types/wicg-file-system-access": "^2023.10.7",
     "electron": "44.1.0",
@@ -35,6 +36,7 @@
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
+    "proper-lockfile": "4.1.2",
     "qrcode": "^1.5.4"
   }
 }

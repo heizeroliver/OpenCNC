@@ -56,6 +56,7 @@ export interface LocalAgentServiceDependencies {
   clearTimer(handle: TimerHandle): void;
   onState(state: LocalAgentState): void;
   onNotification(notification: LocalAgentNotification): void;
+  onJob(record: AgentJobHistoryRecord, previousStatus: AgentJobHistoryRecord["status"] | undefined): void;
 }
 
 const terminalJobStatuses = new Set<AgentJobHistoryRecord["status"]>(["completed", "blocked", "conflicted", "failed"]);
@@ -83,7 +84,8 @@ const defaultDependencies = (): LocalAgentServiceDependencies => ({
   setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimer: handle => clearTimeout(handle),
   onState: () => undefined,
-  onNotification: () => undefined
+  onNotification: () => undefined,
+  onJob: () => undefined
 });
 
 export class LocalAgentService {
@@ -185,7 +187,7 @@ export class LocalAgentService {
       this.rootFailureCount += 1;
       const message = error instanceof Error ? error.message : String(error);
       nextDelay = exponentialRetryDelay(this.rootFailureCount, this.configuration.retryInitialSeconds * 1_000, this.configuration.retryMaximumSeconds * 1_000);
-      this.publishState("error", `Monitored folder unavailable: ${message}`);
+      this.publishState("error", `Monitored folder unavailable: ${message}. Retrying in ${Math.ceil(nextDelay / 1_000)} seconds`);
       if (this.rootFailureCount === 1 || this.rootFailureCount === 3) {
         this.dependencies.onNotification({
           level: "error",
@@ -215,8 +217,7 @@ export class LocalAgentService {
   }
 
   private async restoreJobs(): Promise<void> {
-    for (const record of await this.store.recentJobs(1_000)) {
-      if (terminalJobStatuses.has(record.status)) continue;
+    for (const record of await this.store.unfinishedJobs()) {
       const key = this.jobKey(record.projectKey, record.fingerprint);
       if (!this.activeJobs.has(key)) this.activeJobs.set(key, record);
       if (record.status === "converting") {
@@ -227,6 +228,7 @@ export class LocalAgentService {
         };
         this.activeJobs.set(key, recovered);
         await this.store.saveJob(recovered);
+        this.dependencies.onJob(structuredClone(recovered), record.status);
       }
     }
   }
@@ -242,11 +244,18 @@ export class LocalAgentService {
         message: "Project was deleted or renamed before processing completed"
       };
       await this.store.saveJob(completed);
+      this.dependencies.onJob(structuredClone(completed), record.status);
       this.activeJobs.delete(key);
     }
   }
 
   private async recordEvent(event: AgentCoreEvent<NodeWorkspaceProject, NodeWorkspaceProjectResult>): Promise<void> {
+    if (event.type === "waiting" && event.attemptStatus === "completed") return;
+    if (event.type === "waiting" && (event.attemptStatus === "blocked" || event.attemptStatus === "conflicted")) {
+      if (this.cycleSeverity !== "error") this.cycleSeverity = "warning";
+      return;
+    }
+    if (event.type === "waiting" && event.attemptStatus === "retrying") this.cycleSeverity = "error";
     const projectKey = event.project.directory;
     const key = this.jobKey(projectKey, event.project.fingerprint);
     const existing = this.activeJobs.get(key);
@@ -273,6 +282,7 @@ export class LocalAgentService {
       : "retrying";
     const terminal = terminalJobStatuses.has(status);
     const result = event.result;
+    if (event.type === "waiting" && existing?.status === status && existing.retryCount === event.retryCount) return;
     const next: AgentJobHistoryRecord = {
       ...base,
       status,
@@ -290,6 +300,7 @@ export class LocalAgentService {
     };
     this.activeJobs.set(key, next);
     await this.store.saveJob(next);
+    this.dependencies.onJob(structuredClone(next), existing?.status);
     if (terminal) this.activeJobs.delete(key);
 
     if (event.type === "retrying") {

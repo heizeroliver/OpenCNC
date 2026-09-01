@@ -19,4 +19,15 @@ describe("agent file logger", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("reports a filesystem logging failure and keeps the queue usable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencnc logger failure "));
+    try {
+      const logger = new AgentFileLogger(root);
+      await expect(logger.write("error", "cannot append to a directory")).rejects.toBeInstanceOf(Error);
+      await expect(logger.write("error", "the next write also reports its failure")).rejects.toBeInstanceOf(Error);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

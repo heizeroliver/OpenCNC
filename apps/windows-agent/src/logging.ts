@@ -6,12 +6,13 @@ export class AgentFileLogger {
   constructor(private readonly path: string, private readonly maximumBytes = 5 * 1024 * 1024) {}
 
   write(level: "info" | "warning" | "error", message: string, details?: unknown): Promise<void> {
-    this.pending = this.pending.then(async () => {
+    const operation = this.pending.then(async () => {
       await this.rotateIfNeeded();
       const suffix = details === undefined ? "" : ` ${this.safeJson(details)}`;
       await appendFile(this.path, `${new Date().toISOString()} ${level.toUpperCase()} ${message}${suffix}\n`, "utf8");
-    }).catch(() => undefined);
-    return this.pending;
+    });
+    this.pending = operation.catch(() => undefined);
+    return operation;
   }
 
   flush(): Promise<void> {

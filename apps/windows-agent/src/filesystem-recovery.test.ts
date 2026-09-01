@@ -1,13 +1,18 @@
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   NODE_WORKSPACE_MANIFEST_FILE,
+  NODE_WORKSPACE_LOCK_DIRECTORY,
+  assertWorkspaceSourcesUnchanged,
+  atomicWorkspaceBatchWrite,
   atomicWorkspaceWrite,
   convertNodeWorkspaceProject,
   discoverNodeWorkspaceProjects
 } from "../../../packages/agent-core/src/node-workspace.js";
+import { sha256Hex } from "../../../packages/workspace/src/index.js";
 
 const temporaryRoots: string[] = [];
 const fixture = join(process.cwd(), "fixtures", "synthetic", "minimal.cix");
@@ -100,5 +105,89 @@ describe("local agent filesystem and recovery matrix", () => {
     const manifest = JSON.parse(await readFile(join(projectDirectory, "BPP", NODE_WORKSPACE_MANIFEST_FILE), "utf8")) as { entries: Array<{ sourceChecksum: string; targetChecksum: string; verified: boolean; reverseVerified: boolean }> };
     expect(result).toMatchObject({ status: "converted", verified: true, reverseVerified: true });
     expect(manifest.entries[0]).toMatchObject({ sourceChecksum: result.inputChecksums?.["panel.cix"], targetChecksum: result.outputChecksums?.["panel.bpp"], verified: true, reverseVerified: true });
+  });
+
+  it("allows only one guarded conversion to own a project output at a time", async () => {
+    const root = await temporaryRoot("concurrent conversion");
+    const projectDirectory = join(root, "Shared project");
+    await mkdir(projectDirectory);
+    await copyFile(fixture, join(projectDirectory, "panel.cix"));
+    const project = (await discoverNodeWorkspaceProjects(root))[0]!;
+    const results = await Promise.allSettled([
+      convertNodeWorkspaceProject(project, { includeQa: true }),
+      convertNodeWorkspaceProject(project, { includeQa: true })
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")).toEqual([
+      expect.objectContaining({ reason: expect.objectContaining({ code: "WORKSPACE_PROJECT_BUSY" }) })
+    ]);
+  });
+
+  it("recovers an abandoned stale project lock without bypassing guarded writes", async () => {
+    const root = await temporaryRoot("stale lock");
+    const projectDirectory = join(root, "Recovered project");
+    await mkdir(projectDirectory);
+    await copyFile(fixture, join(projectDirectory, "panel.cix"));
+    const lockDirectory = join(projectDirectory, NODE_WORKSPACE_LOCK_DIRECTORY);
+    await mkdir(lockDirectory);
+    const stale = new Date(Date.now() - 20 * 60_000);
+    await utimes(lockDirectory, stale, stale);
+    const project = (await discoverNodeWorkspaceProjects(root))[0]!;
+    await expect(convertNodeWorkspaceProject(project)).resolves.toMatchObject({ status: "converted", verified: true });
+    await expect(stat(lockDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not complete when a source changes after conversion planning", async () => {
+    const root = await temporaryRoot("late source change");
+    const projectDirectory = join(root, "Changing project");
+    await mkdir(projectDirectory);
+    const sourcePath = join(projectDirectory, "panel.cix");
+    await copyFile(fixture, sourcePath);
+    const project = (await discoverNodeWorkspaceProjects(root))[0]!;
+    const directoryWatcher = watch(projectDirectory);
+    const mutation = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Timed out waiting for output staging")), 10_000);
+      directoryWatcher.on("change", async (_event, filename) => {
+        if (String(filename) !== "BPP") return;
+        directoryWatcher.close();
+        clearTimeout(timeout);
+        try {
+          const source = await readFile(sourcePath, "utf8");
+          await writeFile(sourcePath, source.replace("PARAM,NAME=DP,VALUE=10", "PARAM,NAME=DP,VALUE=11"), "utf8");
+          resolve();
+        } catch (error) { reject(error); }
+      });
+    });
+    const conversion = convertNodeWorkspaceProject(project, { includeQa: true });
+    const [outcome] = await Promise.all([Promise.allSettled([conversion]), mutation]);
+    expect(outcome[0]).toMatchObject({ status: "rejected", reason: expect.objectContaining({ code: "WORKSPACE_SOURCE_CHANGED" }) });
+  });
+
+  it("rolls back an entire BPP batch when a source changes between output replacements", async () => {
+    const root = await temporaryRoot("batch rollback");
+    const projectDirectory = join(root, "Changing multi-output project");
+    await mkdir(projectDirectory);
+    const firstSource = join(projectDirectory, "one.cix");
+    const secondSource = join(projectDirectory, "two.cix");
+    await copyFile(fixture, firstSource);
+    await copyFile(fixture, secondSource);
+    const project = (await discoverNodeWorkspaceProjects(root))[0]!;
+    const inputChecksums = Object.fromEntries(await Promise.all(project.files.map(async file => [file.name, await sha256Hex(await readFile(file.path, "utf8"))])));
+    const outputDirectory = join(projectDirectory, "BPP");
+    await mkdir(outputDirectory);
+
+    await expect(atomicWorkspaceBatchWrite([
+      { path: join(outputDirectory, "one.bpp"), contents: "complete output one" },
+      { path: join(outputDirectory, "two.bpp"), contents: "complete output two" }
+    ], async (_item, index) => {
+      if (index === 1) {
+        const source = await readFile(secondSource, "utf8");
+        await writeFile(secondSource, source.replace("PARAM,NAME=DP,VALUE=10", "PARAM,NAME=DP,VALUE=11"), "utf8");
+      }
+      await assertWorkspaceSourcesUnchanged(project, inputChecksums);
+    })).rejects.toMatchObject({ code: "WORKSPACE_SOURCE_CHANGED" });
+
+    expect((await readdir(outputDirectory)).filter(name => /\.bpp$/i.test(name))).toEqual([]);
+    expect((await readdir(outputDirectory)).filter(name => name.startsWith(".opencnc-") && name.endsWith(".tmp"))).toEqual([]);
   });
 });

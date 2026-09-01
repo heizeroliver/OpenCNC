@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   app,
@@ -9,12 +10,23 @@ import {
   Notification,
   shell,
   Tray,
+  type IpcMainInvokeEvent,
   type MenuItemConstructorOptions
 } from "electron";
-import type { AgentConfiguration } from "../../../packages/agent-core/src/index.js";
+import type { AgentConfiguration, AgentJobHistoryRecord } from "../../../packages/agent-core/src/index.js";
 import { SqliteAgentStore } from "../../../packages/agent-core/src/sqlite-store.js";
 import { AgentFileLogger } from "./logging.js";
 import { LocalAgentService, type LocalAgentMode, type LocalAgentNotification, type LocalAgentState } from "./service.js";
+
+export interface AgentBuildInfo {
+  schemaVersion: 1;
+  version: string;
+  commit: string;
+  shortCommit: string;
+  ref: string;
+  commitTime: string;
+  dirty: boolean;
+}
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -25,10 +37,49 @@ let viewerWindow: BrowserWindow | undefined;
 let service: LocalAgentService | undefined;
 let store: SqliteAgentStore | undefined;
 let logger: AgentFileLogger | undefined;
+let buildInfo: AgentBuildInfo | undefined;
 let shuttingDown = false;
+let pendingAgentView: "status" | "jobs" | "errors" | "settings" = "status";
+let trayRefreshQueue: Promise<void> = Promise.resolve();
+let lastLoggedState = "";
 
 const appRoot = (): string => app.getAppPath();
 const dataPath = (name: string): string => join(app.getPath("userData"), name);
+const errorText = (error: unknown): string => error instanceof Error ? error.stack ?? error.message : String(error);
+
+const log = (level: "info" | "warning" | "error", message: string, details?: unknown): void => {
+  const operation = logger?.write(level, message, details);
+  if (!operation) {
+    if (level === "error") console.error(message, details);
+    return;
+  }
+  void operation.catch(error => { console.error(`OpenCNC logging failed: ${errorText(error)}`); });
+};
+
+const runBackground = (operation: string, promise: Promise<unknown>): void => {
+  void promise.catch(error => {
+    console.error(`${operation}: ${errorText(error)}`);
+    log("error", `${operation} failed`, { error: errorText(error) });
+  });
+};
+
+const readBuildInfo = async (): Promise<AgentBuildInfo> => {
+  try {
+    const value = JSON.parse(await readFile(join(appRoot(), "dist", "build-info.json"), "utf8")) as AgentBuildInfo;
+    if (value.schemaVersion !== 1 || typeof value.version !== "string" || typeof value.commit !== "string") throw new Error("Invalid build-info.json");
+    return value;
+  } catch {
+    return {
+      schemaVersion: 1,
+      version: app.getVersion(),
+      commit: "unknown",
+      shortCommit: "unknown",
+      ref: "unknown",
+      commitTime: "unknown",
+      dirty: false
+    };
+  }
+};
 
 const modeColor: Record<LocalAgentMode, string> = {
   setup: "#64748b",
@@ -51,18 +102,37 @@ const secureWindowOptions = () => ({
   webPreferences: {
     contextIsolation: true,
     nodeIntegration: false,
-    sandbox: true
+    sandbox: true,
+    webSecurity: true
   }
 });
 
+const openExternalHttpUrl = (url: string): void => {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error(`Blocked external protocol ${parsed.protocol}`);
+    runBackground("Open external URL", shell.openExternal(parsed.toString()));
+  } catch (error) {
+    log("warning", "Blocked invalid external URL", { url, error: errorText(error) });
+  }
+};
+
 const installNavigationGuards = (window: BrowserWindow): void => {
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) void shell.openExternal(url);
+    openExternalHttpUrl(url);
     return { action: "deny" };
   });
   window.webContents.on("will-navigate", (event, url) => {
-    if (url !== window.webContents.getURL()) event.preventDefault();
+    if (url !== window.webContents.getURL()) {
+      event.preventDefault();
+      log("warning", "Blocked renderer navigation", { url });
+    }
   });
+};
+
+const sendPendingAgentView = (): void => {
+  if (!agentWindow || agentWindow.isDestroyed() || agentWindow.webContents.isLoadingMainFrame()) return;
+  agentWindow.webContents.send("agent:navigate", pendingAgentView);
 };
 
 const createAgentWindow = (): BrowserWindow => {
@@ -77,11 +147,13 @@ const createAgentWindow = (): BrowserWindow => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
       preload: join(appRoot(), "apps", "windows-agent", "preload.cjs")
     }
   });
   installNavigationGuards(window);
-  void window.loadFile(join(appRoot(), "apps", "windows-agent", "ui", "index.html"));
+  window.webContents.on("did-finish-load", sendPendingAgentView);
+  runBackground("Load Local Agent window", window.loadFile(join(appRoot(), "apps", "windows-agent", "ui", "index.html")));
   window.on("close", event => {
     if (!shuttingDown) {
       event.preventDefault();
@@ -93,17 +165,18 @@ const createAgentWindow = (): BrowserWindow => {
 };
 
 const showAgentWindow = (view: "status" | "jobs" | "errors" | "settings" = "status"): void => {
+  pendingAgentView = view;
   if (!agentWindow || agentWindow.isDestroyed()) agentWindow = createAgentWindow();
   agentWindow.show();
   agentWindow.focus();
-  agentWindow.webContents.send("agent:navigate", view);
+  sendPendingAgentView();
 };
 
 const openOpenCnc = (): void => {
   if (!viewerWindow || viewerWindow.isDestroyed()) {
     viewerWindow = new BrowserWindow({ ...secureWindowOptions(), width: 1360, height: 900, minWidth: 960, minHeight: 680, title: "OpenCNC" });
     installNavigationGuards(viewerWindow);
-    void viewerWindow.loadFile(join(appRoot(), "dist", "index.html"));
+    runBackground("Load OpenCNC viewer", viewerWindow.loadFile(join(appRoot(), "dist", "index.html")));
     viewerWindow.on("closed", () => { viewerWindow = undefined; });
   }
   viewerWindow.show();
@@ -113,6 +186,7 @@ const openOpenCnc = (): void => {
 const applyAutoStart = (enabled: boolean): void => {
   if (process.platform !== "win32") return;
   app.setLoginItemSettings({
+    name: "OpenCNC Local Agent",
     openAtLogin: enabled,
     path: process.execPath,
     args: ["--hidden"]
@@ -120,7 +194,7 @@ const applyAutoStart = (enabled: boolean): void => {
 };
 
 const notify = (notification: LocalAgentNotification): void => {
-  void logger?.write(notification.level, notification.title, { body: notification.body });
+  log(notification.level, notification.title, { body: notification.body });
   if (!Notification.isSupported()) return;
   new Notification({ title: notification.title, body: notification.body, silent: notification.level === "info" }).show();
 };
@@ -131,10 +205,10 @@ const openPath = async (path: string | undefined): Promise<void> => {
   if (error) throw new Error(error);
 };
 
-const refreshTray = async (state?: LocalAgentState): Promise<void> => {
+const refreshTray = async (): Promise<void> => {
   if (!tray || !service) return;
   const snapshot = await service.snapshot(8);
-  const current = state ?? snapshot.state;
+  const current = snapshot.state;
   tray.setImage(trayIcon(current.mode));
   tray.setToolTip(`OpenCNC Local Agent — ${current.mode}: ${current.message}`);
   tray.setTitle(process.platform === "darwin" ? current.mode === "processing" ? " CNC" : "" : "");
@@ -148,14 +222,15 @@ const refreshTray = async (state?: LocalAgentState): Promise<void> => {
     { type: "separator" },
     { label: "Open OpenCNC", click: openOpenCnc },
     { label: "Open Local Agent", click: () => showAgentWindow("status") },
-    { label: "Open monitored folder", enabled: Boolean(snapshot.configuration.parentProjectsFolder), click: () => { void openPath(snapshot.configuration.parentProjectsFolder); } },
+    { label: "Open monitored folder", enabled: Boolean(snapshot.configuration.parentProjectsFolder), click: () => { runBackground("Open monitored folder", openPath(snapshot.configuration.parentProjectsFolder)); } },
+    { label: "Open logs folder", click: () => { runBackground("Open logs folder", openPath(app.getPath("userData"))); } },
     { type: "separator" },
     {
       label: snapshot.configuration.automationEnabled ? "Pause automation" : "Resume automation",
-      click: () => { void service!.setAutomationEnabled(!snapshot.configuration.automationEnabled); }
+      click: () => { runBackground("Change automation state", service!.setAutomationEnabled(!snapshot.configuration.automationEnabled)); }
     },
-    { label: "Convert now", enabled: snapshot.configuration.automationEnabled && Boolean(snapshot.configuration.parentProjectsFolder), click: () => { void service!.runCycle(); } },
-    { label: "Change monitored folder…", click: () => { void chooseParentFolder(); } },
+    { label: "Convert now", enabled: snapshot.configuration.automationEnabled && Boolean(snapshot.configuration.parentProjectsFolder), click: () => { runBackground("Manual conversion cycle", service!.runCycle()); } },
+    { label: "Change monitored folder…", click: () => { runBackground("Choose monitored folder", chooseParentFolder()); } },
     { label: "Recent jobs", submenu: recentItems.length ? recentItems : [{ label: "No jobs yet", enabled: false }] },
     { label: "View all jobs", click: () => showAgentWindow("jobs") },
     { label: "View errors", click: () => showAgentWindow("errors") },
@@ -164,12 +239,19 @@ const refreshTray = async (state?: LocalAgentState): Promise<void> => {
       label: "Start with Windows",
       type: "checkbox",
       checked: snapshot.configuration.autoStart,
-      click: item => { void updateConfiguration({ autoStart: item.checked }); }
+      click: item => { runBackground("Change Windows startup setting", updateConfiguration({ autoStart: item.checked })); }
     },
     { type: "separator" },
     { label: "Exit", click: () => app.quit() }
   ];
   tray.setContextMenu(Menu.buildFromTemplate(template));
+};
+
+const queueTrayRefresh = (): void => {
+  trayRefreshQueue = trayRefreshQueue.then(refreshTray).catch(error => {
+    console.error(`Refresh tray failed: ${errorText(error)}`);
+    log("error", "Refresh tray failed", { error: errorText(error) });
+  });
 };
 
 const updateConfiguration = async (changes: Partial<AgentConfiguration>): Promise<AgentConfiguration> => {
@@ -201,16 +283,82 @@ const chooseMachineProfile = async (): Promise<string | undefined> => {
   return result.canceled ? undefined : result.filePaths[0];
 };
 
+const assertAgentSender = (event: IpcMainInvokeEvent): void => {
+  if (!agentWindow || agentWindow.isDestroyed() || event.sender.id !== agentWindow.webContents.id) throw new Error("Rejected IPC request from an untrusted renderer");
+};
+
+const allowedConfigurationKeys = new Set<keyof AgentConfiguration>([
+  "schemaVersion", "automationEnabled", "parentProjectsFolder", "outputFolder", "scanIntervalSeconds", "stabilityScans",
+  "qaEnabled", "machineProfilePath", "autoStart", "retryInitialSeconds", "retryMaximumSeconds", "notifyOnSuccess"
+]);
+
+const validateConfigurationChanges = (value: unknown): Partial<AgentConfiguration> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Configuration changes must be an object");
+  for (const key of Object.keys(value)) if (!allowedConfigurationKeys.has(key as keyof AgentConfiguration)) throw new Error(`Unsupported configuration key: ${key}`);
+  return value as Partial<AgentConfiguration>;
+};
+
 const registerIpc = (): void => {
-  ipcMain.handle("agent:snapshot", () => service!.snapshot(100));
-  ipcMain.handle("agent:choose-parent-folder", chooseParentFolder);
-  ipcMain.handle("agent:choose-machine-profile", chooseMachineProfile);
-  ipcMain.handle("agent:update-configuration", (_event, changes: Partial<AgentConfiguration>) => updateConfiguration(changes));
-  ipcMain.handle("agent:set-enabled", async (_event, enabled: boolean) => { await service!.setAutomationEnabled(Boolean(enabled)); await refreshTray(); });
-  ipcMain.handle("agent:run-now", async () => { await service!.runCycle(); return service!.snapshot(100); });
-  ipcMain.handle("agent:open-monitored-folder", async () => openPath((await service!.snapshot(1)).configuration.parentProjectsFolder));
-  ipcMain.handle("agent:open-data-folder", () => openPath(app.getPath("userData")));
-  ipcMain.handle("agent:open-opencnc", () => openOpenCnc());
+  ipcMain.handle("agent:snapshot", event => { assertAgentSender(event); return service!.snapshot(100); });
+  ipcMain.handle("agent:about", event => { assertAgentSender(event); return structuredClone(buildInfo!); });
+  ipcMain.handle("agent:choose-parent-folder", event => { assertAgentSender(event); return chooseParentFolder(); });
+  ipcMain.handle("agent:choose-machine-profile", event => { assertAgentSender(event); return chooseMachineProfile(); });
+  ipcMain.handle("agent:update-configuration", (event, changes: unknown) => { assertAgentSender(event); return updateConfiguration(validateConfigurationChanges(changes)); });
+  ipcMain.handle("agent:set-enabled", async (event, enabled: unknown) => {
+    assertAgentSender(event);
+    if (typeof enabled !== "boolean") throw new Error("Automation state must be a boolean");
+    await service!.setAutomationEnabled(enabled);
+    await refreshTray();
+  });
+  ipcMain.handle("agent:run-now", async event => { assertAgentSender(event); await service!.runCycle(); return service!.snapshot(100); });
+  ipcMain.handle("agent:open-monitored-folder", async event => { assertAgentSender(event); return openPath((await service!.snapshot(1)).configuration.parentProjectsFolder); });
+  ipcMain.handle("agent:open-data-folder", event => { assertAgentSender(event); return openPath(app.getPath("userData")); });
+  ipcMain.handle("agent:open-opencnc", event => { assertAgentSender(event); return openOpenCnc(); });
+};
+
+const logState = (state: LocalAgentState): void => {
+  if (state.mode === "processing") return;
+  const signature = `${state.mode}\u0000${state.message}\u0000${state.rootFailureCount}`;
+  if (signature === lastLoggedState) return;
+  lastLoggedState = signature;
+  log(state.mode === "error" ? "error" : state.mode === "warning" ? "warning" : "info", `Agent state: ${state.mode}`, state);
+};
+
+const logJob = (job: AgentJobHistoryRecord, previousStatus: AgentJobHistoryRecord["status"] | undefined): void => {
+  const level = job.status === "retrying" || job.status === "failed" ? "error" : job.status === "blocked" || job.status === "conflicted" ? "warning" : "info";
+  log(level, `Job ${job.status}: ${job.projectName}`, {
+    jobId: job.id,
+    previousStatus,
+    projectPath: job.projectKey,
+    fingerprint: job.fingerprint,
+    retryCount: job.retryCount,
+    sourceNames: job.sourceNames,
+    outputNames: job.outputNames,
+    inputChecksums: job.inputChecksums,
+    outputChecksums: job.outputChecksums,
+    message: job.message
+  });
+};
+
+const shutdown = async (): Promise<void> => {
+  let exitCode = 0;
+  try {
+    await logger?.write("info", "OpenCNC Local Agent shutting down", { version: buildInfo?.version, commit: buildInfo?.commit });
+    await service?.stop();
+    await trayRefreshQueue;
+  } catch (error) {
+    exitCode = 1;
+    console.error(`OpenCNC shutdown failed: ${errorText(error)}`);
+    try { await logger?.write("error", "Shutdown failed", { error: errorText(error) }); }
+    catch (loggingError) { console.error(`OpenCNC logging failed: ${errorText(loggingError)}`); }
+  } finally {
+    try { store?.close(); }
+    catch (error) { exitCode = 1; console.error(`OpenCNC database close failed: ${errorText(error)}`); }
+    try { await logger?.flush(); }
+    catch (error) { exitCode = 1; console.error(`OpenCNC log flush failed: ${errorText(error)}`); }
+    if (exitCode) app.exit(exitCode);
+    else app.quit();
+  }
 };
 
 app.on("second-instance", () => showAgentWindow("status"));
@@ -219,35 +367,59 @@ app.on("before-quit", event => {
   if (shuttingDown) return;
   event.preventDefault();
   shuttingDown = true;
-  void (async () => {
-    await service?.stop();
-    await logger?.flush();
-    store?.close();
-    app.quit();
-  })();
+  runBackground("Application shutdown", shutdown());
 });
 
 if (gotLock) void app.whenReady().then(async () => {
   app.setAppUserModelId("com.opencnc.localagent");
+  buildInfo = await readBuildInfo();
   logger = new AgentFileLogger(dataPath("opencnc-agent.log"));
+  await logger.write("info", "OpenCNC Local Agent starting", {
+    version: buildInfo.version,
+    commit: buildInfo.commit,
+    ref: buildInfo.ref,
+    dirty: buildInfo.dirty,
+    userData: app.getPath("userData")
+  });
   store = new SqliteAgentStore(dataPath("opencnc-agent.sqlite"));
   service = new LocalAgentService(store, {
     onState: state => {
-      void logger?.write(state.mode === "error" ? "error" : state.mode === "warning" ? "warning" : "info", state.message, state);
+      logState(state);
       agentWindow?.webContents.send("agent:state", state);
-      void refreshTray(state);
+      if (!shuttingDown) queueTrayRefresh();
     },
-    onNotification: notify
+    onNotification: notify,
+    onJob: logJob
   });
+
+  if (process.argv.includes("--smoke-test")) {
+    await service.start();
+    const snapshot = await service.snapshot(1);
+    await logger.write("info", "Installed application smoke test passed", { state: snapshot.state.mode, database: dataPath("opencnc-agent.sqlite") });
+    await service.stop();
+    store.close();
+    await logger.write("info", "OpenCNC Local Agent smoke test shutting down", { version: buildInfo.version, commit: buildInfo.commit });
+    await logger.flush();
+    app.exit(0);
+    return;
+  }
+
   registerIpc();
   tray = new Tray(trayIcon("setup"));
   tray.on("click", () => showAgentWindow("status"));
   await service.start();
   const snapshot = await service.snapshot(1);
   applyAutoStart(snapshot.configuration.autoStart);
-  await refreshTray(snapshot.state);
+  await refreshTray();
   if (!process.argv.includes("--hidden") || !snapshot.configuration.parentProjectsFolder) showAgentWindow(snapshot.configuration.parentProjectsFolder ? "status" : "settings");
-}).catch(error => {
-  void dialog.showErrorBox("OpenCNC Local Agent could not start", error instanceof Error ? error.stack ?? error.message : String(error));
+}).catch(async error => {
+  const message = errorText(error);
+  console.error(message);
+  try {
+    await logger?.write("error", "OpenCNC Local Agent could not start", { error: message });
+    await logger?.flush();
+  } catch (loggingError) { console.error(`OpenCNC logging failed: ${errorText(loggingError)}`); }
+  dialog.showErrorBox("OpenCNC Local Agent could not start", message);
+  try { store?.close(); } catch { /* startup error is already surfaced */ }
   app.exit(1);
 });

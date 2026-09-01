@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { caseInsensitiveNameCollisions, readStableWorkspaceSource } from "./node-workspace.js";
+import { caseInsensitiveNameCollisions, readStableWorkspaceSource, validateOutputFolderName } from "./node-workspace.js";
 
 describe("Node workspace safety", () => {
   it("detects Windows case-insensitive and Unicode-normalized collisions", () => {
@@ -23,5 +23,12 @@ describe("Node workspace safety", () => {
       read: async () => "complete export",
       inspect: async () => ({ size: 100, mtimeMs: 200 })
     })).resolves.toBe("complete export");
+  });
+
+  it("rejects output folder names that Windows treats as devices or invalid paths", () => {
+    expect(validateOutputFolderName("BPP")).toBe("BPP");
+    for (const name of ["..", "CON", "con.txt", "PRN", "AUX", "NUL", "COM1", "LPT9", "BPP.", "bad<name", "bad|name", "bad?name", "bad*name"]) {
+      expect(() => validateOutputFolderName(name), name).toThrow(/output folder/i);
+    }
   });
 });

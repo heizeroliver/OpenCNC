@@ -1,8 +1,17 @@
 import type { AgentConfiguration, AgentJobHistoryRecord } from "../../../packages/agent-core/src/index.js";
 import type { LocalAgentSnapshot, LocalAgentState } from "./service.js";
 
+interface AgentBuildInfo {
+  version: string;
+  commit: string;
+  shortCommit: string;
+  ref: string;
+  dirty: boolean;
+}
+
 interface OpenCncAgentApi {
   snapshot(): Promise<LocalAgentSnapshot>;
+  about(): Promise<AgentBuildInfo>;
   chooseParentFolder(): Promise<string | undefined>;
   chooseMachineProfile(): Promise<string | undefined>;
   updateConfiguration(configuration: Partial<AgentConfiguration>): Promise<AgentConfiguration>;
@@ -107,6 +116,12 @@ const refresh = async (): Promise<void> => {
   renderJobs(snapshot.recentJobs);
 };
 
+const renderBuildInfo = (value: AgentBuildInfo): void => {
+  byId("build-version").textContent = `Version ${value.version}`;
+  byId("build-commit").textContent = `Commit ${value.shortCommit}${value.dirty ? " (dirty)" : ""}`;
+  byId("build-commit").title = `${value.commit} · ${value.ref}`;
+};
+
 document.querySelectorAll<HTMLButtonElement>("[data-nav]").forEach(button => button.addEventListener("click", () => navigate(button.dataset.nav as typeof currentView)));
 byId("choose-folder").addEventListener("click", async () => { const value = await window.opencncAgent.chooseParentFolder(); if (value) byId<HTMLInputElement>("parent-folder").value = value; await refresh(); });
 byId("choose-profile").addEventListener("click", async () => { const value = await window.opencncAgent.chooseMachineProfile(); if (value) byId<HTMLInputElement>("machine-profile").value = value; });
@@ -144,4 +159,4 @@ form.addEventListener("submit", async event => {
 window.opencncAgent.onState(state => { if (snapshot) renderState(state); void refresh(); });
 window.opencncAgent.onNavigate(view => navigate(view));
 
-void refresh().then(() => navigate(currentView)).catch(showError);
+void Promise.all([refresh(), window.opencncAgent.about().then(renderBuildInfo)]).then(() => navigate(currentView)).catch(showError);

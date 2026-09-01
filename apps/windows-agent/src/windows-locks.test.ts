@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -63,8 +63,11 @@ describe.runIf(process.platform === "win32")("real Windows exclusive-lock recove
     await writeFile(sourcePath, source.replace("PARAM,NAME=DP,VALUE=10", "PARAM,NAME=DP,VALUE=11"), "utf8");
     const changedProject = (await discoverNodeWorkspaceProjects(root))[0]!;
     const outputPath = join(projectDirectory, "BPP", "panel.bpp");
+    const originalOutput = await readFile(outputPath);
     const outputLock = await acquireExclusiveWindowsLock(outputPath);
     await expect(convertNodeWorkspaceProject(changedProject)).rejects.toMatchObject({ code: expect.stringMatching(/EACCES|EPERM|EBUSY/) });
+    expect(await readFile(outputPath)).toEqual(originalOutput);
+    expect((await readdir(join(projectDirectory, "BPP"))).filter(name => name.startsWith(".opencnc-") && name.endsWith(".tmp"))).toEqual([]);
     await releaseLock(outputLock);
     expect((await convertNodeWorkspaceProject(changedProject)).status).toBe("converted");
   });
