@@ -66,9 +66,9 @@ describe.runIf(process.platform === "win32")("real Windows exclusive-lock recove
     const originalOutput = await readFile(outputPath);
     const outputLock = await acquireExclusiveWindowsLock(outputPath);
     await expect(convertNodeWorkspaceProject(changedProject)).rejects.toMatchObject({ code: expect.stringMatching(/EACCES|EPERM|EBUSY/) });
-    expect(await readFile(outputPath)).toEqual(originalOutput);
     expect((await readdir(join(projectDirectory, "BPP"))).filter(name => name.startsWith(".opencnc-") && name.endsWith(".tmp"))).toEqual([]);
     await releaseLock(outputLock);
+    expect(await readFile(outputPath)).toEqual(originalOutput);
     expect((await convertNodeWorkspaceProject(changedProject)).status).toBe("converted");
   });
 });
