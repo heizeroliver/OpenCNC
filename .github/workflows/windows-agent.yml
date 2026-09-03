@@ -29,6 +29,13 @@ jobs:
       - run: pnpm audit --prod
       - run: pnpm check
       - run: pnpm test
+      - name: Validate Windows PowerShell bridge syntax
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "apps/windows-agent/resources/biesseworks-bridge.ps1"), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { throw ($errors | ForEach-Object Message | Out-String) }
       - name: Build current Windows installer
         run: pnpm agent:package:win
         env:

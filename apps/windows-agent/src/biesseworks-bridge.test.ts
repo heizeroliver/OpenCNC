@@ -14,6 +14,8 @@ describe("BiesseWorks elevated bridge command", () => {
     expect(command).toContain("-Verb RunAs");
     expect(command).toContain("-Wait");
     expect(command).toContain("-STA");
+    expect(command).toContain("-WindowStyle");
+    expect(command).toContain("Hidden");
     expect(command).toContain("\"C:\\Program Files\\OpenCNC\\biesseworks-bridge.ps1\"");
     expect(command).toContain("\"C:\\Users\\Heizer Szabolcs\\AppData\\Local\\Temp\\request.json\"");
   });

@@ -34,7 +34,7 @@ const quotedProcessArgument = (value: string): string => {
 
 export const elevatedBridgeCommand = (powershellPath: string, scriptPath: string, requestPath: string, resultPath: string): string => {
   const childArguments = [
-    "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File",
+    "-NoProfile", "-NonInteractive", "-STA", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File",
     quotedProcessArgument(scriptPath), "-RequestPath", quotedProcessArgument(requestPath), "-ResultPath", quotedProcessArgument(resultPath)
   ];
   return [

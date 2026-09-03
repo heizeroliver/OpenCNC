@@ -21,10 +21,16 @@ function Write-BridgeStatus {
   }
   if ($FileName) { $value.fileName = $FileName }
   if ($Message) { $value.message = $Message }
-  $temporary = "$ResultPath.$([Guid]::NewGuid().ToString('N')).tmp"
-  [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json -Compress), $utf8)
-  if (Test-Path -LiteralPath $ResultPath) { [System.IO.File]::Replace($temporary, $ResultPath, $null) }
-  else { [System.IO.File]::Move($temporary, $ResultPath) }
+  $json = $value | ConvertTo-Json -Compress
+  for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+    try {
+      [System.IO.File]::WriteAllText($ResultPath, $json, $utf8)
+      return
+    } catch {
+      if ($attempt -eq 19) { throw }
+      Start-Sleep -Milliseconds 50
+    }
+  }
 }
 
 try {
@@ -67,6 +73,21 @@ public static class OpenCncBiesseWindows {
         return SetForegroundWindow(window);
     }
 
+    public static IntPtr FindMainWindow(int processId) {
+        IntPtr result = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner != (uint)processId || !IsWindowVisible(window)) return true;
+            StringBuilder name = new StringBuilder(64);
+            GetClassName(window, name, name.Capacity);
+            if (name.ToString() == "#32770") return true;
+            result = window;
+            return false;
+        }, IntPtr.Zero);
+        return result;
+    }
+
     public static IntPtr FindFileDialog(int processId) {
         IntPtr result = IntPtr.Zero;
         EnumWindows(delegate(IntPtr window, IntPtr parameter) {
@@ -75,7 +96,7 @@ public static class OpenCncBiesseWindows {
             if (owner != (uint)processId || !IsWindowVisible(window)) return true;
             StringBuilder name = new StringBuilder(64);
             GetClassName(window, name, name.Capacity);
-            if (name.ToString() != "#32770" || GetDlgItem(window, 1148) == IntPtr.Zero) return true;
+            if (name.ToString() != "#32770" || (GetDlgItem(window, 1148) == IntPtr.Zero && GetDlgItem(window, 1152) == IntPtr.Zero)) return true;
             result = window;
             return false;
         }, IntPtr.Zero);
@@ -84,6 +105,7 @@ public static class OpenCncBiesseWindows {
 
     public static bool SubmitFile(IntPtr dialog, string path) {
         IntPtr fileName = GetDlgItem(dialog, 1148);
+        if (fileName == IntPtr.Zero) fileName = GetDlgItem(dialog, 1152);
         IntPtr openButton = GetDlgItem(dialog, 1);
         if (fileName == IntPtr.Zero || openButton == IntPtr.Zero) return false;
         if (!SetWindowText(fileName, path)) return false;
@@ -93,35 +115,43 @@ public static class OpenCncBiesseWindows {
 }
 '@
 
-  function Find-BiesseEditor {
+  function Find-BiesseEditorWindow {
     foreach ($candidate in @(Get-Process -Name "Editor" -ErrorAction SilentlyContinue)) {
       try {
-        if ($candidate.Path -and [StringComparer]::OrdinalIgnoreCase.Equals([System.IO.Path]::GetFullPath($candidate.Path), $editorPath)) { return $candidate }
+        if (-not $candidate.Path -or -not [StringComparer]::OrdinalIgnoreCase.Equals([System.IO.Path]::GetFullPath($candidate.Path), $editorPath)) { continue }
+        $window = [OpenCncBiesseWindows]::FindMainWindow($candidate.Id)
+        if ($window -ne [IntPtr]::Zero) { return [pscustomobject]@{ Process = $candidate; Window = $window } }
       } catch { }
     }
     return $null
   }
 
   Write-BridgeStatus -State "starting" -Current 0
-  $editor = Find-BiesseEditor
-  if ($null -eq $editor) {
+  $target = Find-BiesseEditorWindow
+  if ($null -eq $target) {
     Start-Process -FilePath $editorPath -WorkingDirectory (Split-Path -Parent $editorPath) | Out-Null
   }
   $deadline = [DateTime]::UtcNow.AddSeconds(60)
   do {
     Start-Sleep -Milliseconds 250
-    $editor = Find-BiesseEditor
-    if ($null -ne $editor) { $editor.Refresh() }
-  } while (($null -eq $editor -or $editor.MainWindowHandle -eq 0) -and [DateTime]::UtcNow -lt $deadline)
-  if ($null -eq $editor -or $editor.MainWindowHandle -eq 0) { throw "BiesseWorks Editor did not become ready within 60 seconds" }
+    $target = Find-BiesseEditorWindow
+  } while ($null -eq $target -and [DateTime]::UtcNow -lt $deadline)
+  if ($null -eq $target) {
+    $editorDetails = @(Get-Process -Name "Editor" -ErrorAction SilentlyContinue | ForEach-Object {
+      try { "PID=$($_.Id), path=$($_.Path)" } catch { "PID=$($_.Id), path=unavailable" }
+    }) -join "; "
+    throw "BiesseWorks opened, but OpenCNC could not find its main window within 60 seconds. Editor processes: $editorDetails"
+  }
 
   $automationShell = New-Object -ComObject WScript.Shell
+  Start-Sleep -Milliseconds 750
   for ($index = 0; $index -lt $outputs.Count; $index += 1) {
     $output = $outputs[$index]
     Write-BridgeStatus -State "opening" -Current ($index + 1) -FileName ([string]$output.name)
-    $editor.Refresh()
-    [OpenCncBiesseWindows]::Activate($editor.MainWindowHandle) | Out-Null
-    $automationShell.AppActivate($editor.Id) | Out-Null
+    $target = Find-BiesseEditorWindow
+    if ($null -eq $target) { throw "The BiesseWorks Editor window closed before $($output.name) could be opened" }
+    [OpenCncBiesseWindows]::Activate($target.Window) | Out-Null
+    $automationShell.AppActivate($target.Process.Id) | Out-Null
     Start-Sleep -Milliseconds 250
     [System.Windows.Forms.SendKeys]::SendWait("^o")
 
@@ -129,7 +159,7 @@ public static class OpenCncBiesseWindows {
     $dialogDeadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
       Start-Sleep -Milliseconds 100
-      $dialog = [OpenCncBiesseWindows]::FindFileDialog($editor.Id)
+      $dialog = [OpenCncBiesseWindows]::FindFileDialog($target.Process.Id)
     } while ($dialog -eq [IntPtr]::Zero -and [DateTime]::UtcNow -lt $dialogDeadline)
     if ($dialog -eq [IntPtr]::Zero) { throw "BiesseWorks did not open its File > Open dialog for $($output.name)" }
     if (-not [OpenCncBiesseWindows]::SubmitFile($dialog, [string]$output.path)) { throw "OpenCNC could not enter $($output.name) in the BiesseWorks file dialog" }

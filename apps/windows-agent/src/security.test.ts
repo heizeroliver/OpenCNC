@@ -64,6 +64,7 @@ describe("Windows Electron security posture", () => {
     expect(launcher).toContain('sha256(await read(output.path)) !== output.checksum');
     expect(launcher).toContain('extname(name).toLowerCase() !== ".bpp"');
     expect(bridge).toContain("Get-FileHash -LiteralPath $output.path -Algorithm SHA256");
+    expect(bridge).toContain("FindMainWindow");
     expect(bridge).toContain('[System.Windows.Forms.SendKeys]::SendWait("^o")');
     expect(bridge).not.toMatch(/Set-ItemProperty|New-ItemProperty|reg\.exe|reg add/i);
     expect(builder).toContain("apps/windows-agent/resources/biesseworks-bridge.ps1");
