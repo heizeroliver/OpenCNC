@@ -15,6 +15,7 @@ import {
 } from "electron";
 import type { AgentConfiguration, AgentJobHistoryRecord } from "../../../packages/agent-core/src/index.js";
 import { SqliteAgentStore } from "../../../packages/agent-core/src/sqlite-store.js";
+import { runBiesseWorksBridge } from "./biesseworks-bridge.js";
 import { openVerifiedBppOutputs, type BiesseWorksOpenResult } from "./biesseworks.js";
 import { AgentFileLogger } from "./logging.js";
 import { LocalAgentService, type LocalAgentMode, type LocalAgentNotification, type LocalAgentState } from "./service.js";
@@ -43,9 +44,13 @@ let shuttingDown = false;
 let pendingAgentView: "status" | "jobs" | "errors" | "settings" = "status";
 let trayRefreshQueue: Promise<void> = Promise.resolve();
 let lastLoggedState = "";
+let activeBiesseWorksJobId: string | undefined;
 
 const appRoot = (): string => app.getAppPath();
 const dataPath = (name: string): string => join(app.getPath("userData"), name);
+const biesseWorksBridgePath = (): string => app.isPackaged
+  ? join(process.resourcesPath, "biesseworks-bridge.ps1")
+  : join(appRoot(), "apps", "windows-agent", "resources", "biesseworks-bridge.ps1");
 const errorText = (error: unknown): string => error instanceof Error ? error.stack ?? error.message : String(error);
 
 const log = (level: "info" | "warning" | "error", message: string, details?: unknown): void => {
@@ -211,15 +216,21 @@ const openJobOutputsInBiesseWorks = async (jobId: unknown): Promise<BiesseWorksO
   if (!store) throw new Error("Agent history is not ready");
   const job = (await store.recentJobs(10_000)).find(record => record.id === jobId);
   if (!job) throw new Error("The selected conversion is no longer available in job history");
+  if (activeBiesseWorksJobId) throw new Error("Another BiesseWorks batch is already opening");
+  activeBiesseWorksJobId = job.id;
   log("info", `Opening verified BPP batch in BiesseWorks: ${job.projectName}`, { jobId: job.id, outputNames: job.outputNames });
   try {
-    const result = await openVerifiedBppOutputs(job, path => shell.openPath(path));
-    log("info", `Sent ${result.openedCount} BPP file(s) to the Windows file handler: ${job.projectName}`, { jobId: job.id, outputNames: result.outputNames });
+    const result = await openVerifiedBppOutputs(job, outputs => runBiesseWorksBridge({
+      scriptPath: biesseWorksBridgePath(),
+      outputs,
+      onProgress: progress => agentWindow?.webContents.send("agent:biesseworks-progress", { jobId: job.id, projectName: job.projectName, ...progress })
+    }));
+    log("info", `Opened ${result.openedCount} BPP file(s) through BiesseWorks File > Open: ${job.projectName}`, { jobId: job.id, outputNames: result.outputNames });
     return result;
   } catch (error) {
     log("warning", `Could not open BPP batch in BiesseWorks: ${job.projectName}`, { jobId: job.id, error: errorText(error) });
     throw error;
-  }
+  } finally { activeBiesseWorksJobId = undefined; }
 };
 
 const localized = (language: AgentConfiguration["language"], english: string, hungarian: string): string => language === "hu" ? hungarian : english;

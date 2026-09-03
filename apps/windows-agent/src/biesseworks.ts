@@ -10,16 +10,16 @@ export interface BiesseWorksOpenResult {
   outputNames: string[];
 }
 
+export interface VerifiedBppOutput {
+  name: string;
+  path: string;
+  checksum: string;
+}
+
 export interface BiesseWorksFileDependencies {
   platform: NodeJS.Platform;
   inspect(path: string): Promise<{ isFile(): boolean }>;
   read(path: string): Promise<Uint8Array>;
-}
-
-interface VerifiedOutput {
-  name: string;
-  path: string;
-  checksum: string;
 }
 
 const defaultFileDependencies = {
@@ -29,7 +29,7 @@ const defaultFileDependencies = {
 
 const sha256 = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex");
 
-export const resolveVerifiedBppOutputs = (job: AgentJobHistoryRecord): VerifiedOutput[] => {
+export const resolveVerifiedBppOutputs = (job: AgentJobHistoryRecord): VerifiedBppOutput[] => {
   if (job.status !== "completed" || job.verified !== true || job.reverseVerified !== true) {
     throw new Error("Only a completed, fully verified conversion can be opened in BiesseWorks");
   }
@@ -59,7 +59,7 @@ export const resolveVerifiedBppOutputDirectory = (job: AgentJobHistoryRecord): s
 
 export async function openVerifiedBppOutputs(
   job: AgentJobHistoryRecord,
-  open: (path: string) => Promise<string>,
+  openBatch: (outputs: VerifiedBppOutput[]) => Promise<number>,
   dependencies: Partial<BiesseWorksFileDependencies> = {}
 ): Promise<BiesseWorksOpenResult> {
   const platform = dependencies.platform ?? process.platform;
@@ -78,14 +78,8 @@ export async function openVerifiedBppOutputs(
     }
   }
 
-  const attempts = await Promise.all(outputs.map(async output => {
-    try { return { output, error: await open(output.path) }; }
-    catch (error) { return { output, error: error instanceof Error ? error.message : String(error) }; }
-  }));
-  const failures = attempts.filter(attempt => attempt.error);
-  if (failures.length) {
-    const acceptedCount = attempts.length - failures.length;
-    throw new Error(`${acceptedCount}/${attempts.length} BPP file(s) were accepted by Windows. Windows could not hand off ${failures.map(item => item.output.name).join(", ")}. Check the .bpp file association and try again.`);
-  }
-  return { jobId: job.id, projectName: job.projectName, openedCount: outputs.length, outputNames: outputs.map(output => output.name) };
+  const openedCount = await openBatch(outputs);
+  if (!Number.isInteger(openedCount) || openedCount < 0 || openedCount > outputs.length) throw new Error("BiesseWorks bridge returned an invalid opened-file count");
+  if (openedCount !== outputs.length) throw new Error(`BiesseWorks opened ${openedCount}/${outputs.length} verified BPP file(s)`);
+  return { jobId: job.id, projectName: job.projectName, openedCount, outputNames: outputs.map(output => output.name) };
 }

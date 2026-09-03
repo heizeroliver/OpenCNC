@@ -21,5 +21,6 @@ contextBridge.exposeInMainWorld("opencncAgent", {
   openDataFolder: () => ipcRenderer.invoke("agent:open-data-folder"),
   openOpenCnc: () => ipcRenderer.invoke("agent:open-opencnc"),
   onState: callback => subscribe("agent:state", callback),
+  onBiesseWorksProgress: callback => subscribe("agent:biesseworks-progress", callback),
   onNavigate: callback => subscribe("agent:navigate", callback)
 });

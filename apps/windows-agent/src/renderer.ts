@@ -3,6 +3,7 @@ import type { LocalAgentProjectFolder, LocalAgentProjectFolderStatus, LocalAgent
 
 interface AgentBuildInfo { version: string; commit: string; shortCommit: string; ref: string; dirty: boolean; }
 interface BiesseWorksOpenResult { jobId: string; projectName: string; openedCount: number; outputNames: string[]; }
+interface BiesseWorksProgress { jobId: string; projectName: string; state: "waiting_permission" | "starting" | "opening" | "completed" | "failed"; current: number; total: number; fileName?: string; message?: string; }
 interface OpenCncAgentApi {
   snapshot(): Promise<LocalAgentSnapshot>;
   about(): Promise<AgentBuildInfo>;
@@ -18,6 +19,7 @@ interface OpenCncAgentApi {
   openDataFolder(): Promise<void>;
   openOpenCnc(): Promise<void>;
   onState(callback: (state: LocalAgentState) => void): () => void;
+  onBiesseWorksProgress(callback: (progress: BiesseWorksProgress) => void): () => void;
   onNavigate(callback: (view: "status" | "jobs" | "errors" | "settings") => void): () => void;
 }
 declare global { interface Window { opencncAgent: OpenCncAgentApi } }
@@ -33,7 +35,8 @@ const translations = {
     monitoringRetry: "Monitoring and retry", scanInterval: "Scan interval (seconds)", stableScans: "Stable scans required", firstRetry: "First retry (seconds)", maximumRetry: "Maximum retry (seconds)",
     verification: "Verification", machineProfile: "Machine profile", noProfile: "No profile selected", clear: "Clear", generateQa: "Generate QA PDF job sheets",
     agentBehavior: "Agent behavior", language: "Language", automationRunning: "Automation running", startWindows: "Start after Windows login", notifySuccess: "Notify for ordinary successful conversions", saveSettings: "Save settings", openData: "Open data and logs folder",
-    projectFolders: "PROJECT FOLDERS", folderOverview: "Folder overview", folder: "Folder", noFolders: "No project folders found.", sendSelectedBpp: "Send selected BPP files to BiesseWorks", openSelectedOutput: "Open selected output folder", openSelectedProject: "Open selected project folder"
+    projectFolders: "PROJECT FOLDERS", folderOverview: "Folder overview", folder: "Folder", noFolders: "No project folders found.", openSelectedBpp: "Open selected BPPs in BiesseWorks", openSelectedOutput: "Open selected output folder", openSelectedProject: "Open selected project folder",
+    biesseWorksHint: "Opens verified BPPs one by one through BiesseWorks File → Open. Approve the Windows permission request once, then avoid using BiesseWorks until the batch finishes."
   },
   hu: {
     localAgent: "Helyi ügynök", navStatus: "Állapot", navJobs: "Legutóbbi feladatok", navErrors: "Hibák", navSettings: "Beállítások",
@@ -45,7 +48,8 @@ const translations = {
     monitoringRetry: "Figyelés és újrapróbálkozás", scanInterval: "Ellenőrzési időköz (másodperc)", stableScans: "Szükséges stabil ellenőrzések", firstRetry: "Első újrapróbálkozás (másodperc)", maximumRetry: "Legnagyobb újrapróbálkozási idő (másodperc)",
     verification: "Ellenőrzés", machineProfile: "Gépprofil", noProfile: "Nincs profil kiválasztva", clear: "Törlés", generateQa: "QA PDF munkalapok készítése",
     agentBehavior: "Ügynök működése", language: "Nyelv", automationRunning: "Automatizálás fut", startWindows: "Indítás Windows-bejelentkezés után", notifySuccess: "Értesítés a szokásos sikeres konverziókról", saveSettings: "Beállítások mentése", openData: "Adat- és naplómappa megnyitása",
-    projectFolders: "PROJEKTMAPPÁK", folderOverview: "Mappák áttekintése", folder: "Mappa", noFolders: "Nem található projektmappa.", sendSelectedBpp: "A kijelölt BPP-fájlok küldése a BiesseWorksnek", openSelectedOutput: "Kijelölt kimeneti mappa megnyitása", openSelectedProject: "Kijelölt projektmappa megnyitása"
+    projectFolders: "PROJEKTMAPPÁK", folderOverview: "Mappák áttekintése", folder: "Mappa", noFolders: "Nem található projektmappa.", openSelectedBpp: "Kijelölt BPP-k megnyitása a BiesseWorksben", openSelectedOutput: "Kijelölt kimeneti mappa megnyitása", openSelectedProject: "Kijelölt projektmappa megnyitása",
+    biesseWorksHint: "Az ellenőrzött BPP-ket egyenként nyitja meg a BiesseWorks Fájl → Megnyitás funkciójával. Egyszer engedélyezze a Windows-kérést, majd a folyamat végéig ne használja a BiesseWorksöt."
   }
 } as const;
 type TranslationKey = keyof typeof translations.en;
@@ -67,6 +71,7 @@ const errorBanner = byId<HTMLElement>("error-banner");
 let snapshot: LocalAgentSnapshot;
 let currentView: "status" | "jobs" | "errors" | "settings" = "status";
 let selectedProjectDirectory: string | undefined;
+let biesseWorksBusy = false;
 
 const language = (): AgentLanguage => snapshot?.configuration.language ?? "en";
 const t = (key: TranslationKey): string => translations[language()][key];
@@ -145,10 +150,10 @@ const renderBiesseWorksAction = (jobs: AgentJobHistoryRecord[]): void => {
   const button = byId<HTMLButtonElement>("open-latest-bpp");
   const folderButton = byId<HTMLButtonElement>("open-latest-folder");
   const job = latestOpenableJob(jobs);
-  button.disabled = !job;
+  button.disabled = !job || biesseWorksBusy;
   folderButton.disabled = !job;
-  button.textContent = job ? language() === "hu" ? `Küldés a BiesseWorksnek: ${job.projectName} (${job.outputNames.length} BPP)` : `Send to BiesseWorks: ${job.projectName} (${job.outputNames.length} BPP)` : language() === "hu" ? "Még nincs ellenőrzött BPP-fájl" : "No verified BPP files yet";
-  button.title = job ? language() === "hu" ? "A Windows átadja az ellenőrzött fájlokat a .bpp fájltársításhoz." : "Ask Windows to hand the verified files to the registered .bpp application." : language() === "hu" ? "Először futtasson egy új, ellenőrzött CIX → BPP konverziót" : "Run a new verified CIX to BPP conversion first";
+  button.textContent = job ? language() === "hu" ? `Legutóbbi megnyitása a BiesseWorksben: ${job.projectName} (${job.outputNames.length} BPP)` : `Open latest in BiesseWorks: ${job.projectName} (${job.outputNames.length} BPP)` : language() === "hu" ? "Még nincs ellenőrzött BPP-fájl" : "No verified BPP files yet";
+  button.title = job ? language() === "hu" ? "Az ellenőrzött fájlok egyenként nyílnak meg a BiesseWorks Fájl → Megnyitás funkciójával." : "Open each verified file through BiesseWorks File → Open." : language() === "hu" ? "Először futtasson egy új, ellenőrzött CIX → BPP konverziót" : "Run a new verified CIX to BPP conversion first";
 };
 const renderJobs = (jobs: AgentJobHistoryRecord[]): void => {
   const filtered = currentView === "errors" ? jobs.filter(job => ["blocked", "conflicted", "failed", "retrying"].includes(job.status)) : jobs;
@@ -187,7 +192,7 @@ const renderProjectFolders = (): void => {
   const selected = selectedProject();
   byId<HTMLButtonElement>("open-selected-project").disabled = !selected;
   byId<HTMLButtonElement>("open-selected-output").disabled = !selected || selected.bppCount === 0;
-  byId<HTMLButtonElement>("open-selected-bpp").disabled = !selected?.latestJobId;
+  byId<HTMLButtonElement>("open-selected-bpp").disabled = !selected?.latestJobId || biesseWorksBusy;
 };
 
 const navigate = (view: typeof currentView): void => {
@@ -203,11 +208,20 @@ const renderBuildInfo = (value: AgentBuildInfo): void => {
   byId("build-commit").textContent = `Commit ${value.shortCommit}${value.dirty ? " (dirty)" : ""}`;
   byId("build-commit").title = `${value.commit} · ${value.ref}`;
 };
-const sendJobToWindows = async (jobId: string): Promise<void> => {
+const openJobInBiesseWorks = async (jobId: string): Promise<void> => {
   const confirmation = byId<HTMLElement>("biesseworks-confirmation");
-  confirmation.textContent = language() === "hu" ? "BPP-fájlok átadása a Windowsnak…" : "Sending BPP files to Windows…";
-  const result = await window.opencncAgent.openBppInBiesseWorks(jobId);
-  confirmation.textContent = language() === "hu" ? `${result.openedCount} fájl átadva a Windowsnak (${result.projectName}). Ha a BiesseWorks nem tölti be őket, használja a mappamegnyitó gombot.` : `${result.openedCount} file(s) handed to Windows (${result.projectName}). If BiesseWorks does not load them, use the open-folder button.`;
+  biesseWorksBusy = true;
+  renderBiesseWorksAction(snapshot.recentJobs);
+  renderProjectFolders();
+  confirmation.textContent = language() === "hu" ? "Rendszergazdai engedélyre vár…" : "Waiting for Windows administrator permission…";
+  try {
+    const result = await window.opencncAgent.openBppInBiesseWorks(jobId);
+    confirmation.textContent = language() === "hu" ? `${result.openedCount}/${result.outputNames.length} BPP megnyitva a BiesseWorksben (${result.projectName}).` : `${result.openedCount}/${result.outputNames.length} BPP file(s) opened in BiesseWorks (${result.projectName}).`;
+  } finally {
+    biesseWorksBusy = false;
+    renderBiesseWorksAction(snapshot.recentJobs);
+    renderProjectFolders();
+  }
 };
 
 document.querySelectorAll<HTMLButtonElement>("[data-nav]").forEach(button => button.addEventListener("click", () => navigate(button.dataset.nav as typeof currentView)));
@@ -218,11 +232,11 @@ byId("open-folder").addEventListener("click", () => { void window.opencncAgent.o
 byId("open-data").addEventListener("click", () => { void window.opencncAgent.openDataFolder(); });
 byId("open-opencnc").addEventListener("click", () => { void window.opencncAgent.openOpenCnc(); });
 byId("run-now").addEventListener("click", async () => { clearError(); try { snapshot = await window.opencncAgent.runNow(); renderAll(); } catch (error) { showError(error); } });
-byId("open-latest-bpp").addEventListener("click", async () => { clearError(); const job = latestOpenableJob(snapshot.recentJobs); if (!job) return; try { await sendJobToWindows(job.id); } catch (error) { byId("biesseworks-confirmation").textContent = ""; showError(error); } finally { renderBiesseWorksAction(snapshot.recentJobs); } });
+byId("open-latest-bpp").addEventListener("click", async () => { clearError(); const job = latestOpenableJob(snapshot.recentJobs); if (!job) return; try { await openJobInBiesseWorks(job.id); } catch (error) { byId("biesseworks-confirmation").textContent = ""; showError(error); } });
 byId("open-latest-folder").addEventListener("click", () => { const job = latestOpenableJob(snapshot.recentJobs); if (job) void window.opencncAgent.openProjectOutputFolder(job.projectKey).catch(showError); });
 byId("open-selected-project").addEventListener("click", () => { const folder = selectedProject(); if (folder) void window.opencncAgent.openProjectFolder(folder.directory).catch(showError); });
 byId("open-selected-output").addEventListener("click", () => { const folder = selectedProject(); if (folder) void window.opencncAgent.openProjectOutputFolder(folder.directory).catch(showError); });
-byId("open-selected-bpp").addEventListener("click", async () => { const jobId = selectedProject()?.latestJobId; if (!jobId) return; clearError(); try { await sendJobToWindows(jobId); } catch (error) { byId("biesseworks-confirmation").textContent = ""; showError(error); } });
+byId("open-selected-bpp").addEventListener("click", async () => { const jobId = selectedProject()?.latestJobId; if (!jobId) return; clearError(); try { await openJobInBiesseWorks(jobId); } catch (error) { byId("biesseworks-confirmation").textContent = ""; showError(error); } });
 byId("toggle-automation").addEventListener("click", async () => { clearError(); try { await window.opencncAgent.setAutomationEnabled(!snapshot.configuration.automationEnabled); await refresh(); } catch (error) { showError(error); } });
 byId<HTMLSelectElement>("language").addEventListener("change", async event => {
   clearError();
@@ -253,6 +267,12 @@ form.addEventListener("submit", async event => {
 });
 
 window.opencncAgent.onState(state => { if (snapshot) renderState(state); void refresh(); });
+window.opencncAgent.onBiesseWorksProgress(progress => {
+  const confirmation = byId<HTMLElement>("biesseworks-confirmation");
+  if (progress.state === "waiting_permission") confirmation.textContent = language() === "hu" ? "Rendszergazdai engedélyre vár…" : "Waiting for Windows administrator permission…";
+  else if (progress.state === "starting") confirmation.textContent = language() === "hu" ? "BiesseWorks indítása…" : "Starting BiesseWorks…";
+  else if (progress.state === "opening") confirmation.textContent = language() === "hu" ? `Megnyitás ${progress.current}/${progress.total}: ${progress.fileName ?? "BPP"}` : `Opening ${progress.current}/${progress.total}: ${progress.fileName ?? "BPP"}`;
+});
 window.opencncAgent.onNavigate(view => navigate(view));
 void Promise.all([window.opencncAgent.snapshot(), window.opencncAgent.about()]).then(([initialSnapshot, info]) => {
   snapshot = initialSnapshot;

@@ -29,6 +29,7 @@ Current verified coverage:
 - Automatic, fail-closed `_f0.cix` + `_f1.cix` two-sided pairing into one BPP with the verified BiesseWorks operator-reposition `WAIT` boundary
 - Cross-platform unattended Node watcher with stable-export debouncing, per-project manifests, and checksum-protected updates—no Python runtime required
 - Packaged bilingual Hungarian/English Windows Local Agent with a tray controller, new-project enrollment, persistent SQLite retry/history state, Windows login startup, notifications, project-folder browser, and an NSIS installer with its own runtime
+- Verified BPP batches opened sequentially through BiesseWorks File → Open with one Windows permission prompt, per-file progress, and output-folder fallback
 - Conversion Diff Center with field-level source, target, and reverse-conversion values
 - Workpiece dimensions, expanded drill counts, grouped drill lists, and route lengths
 - Tolerance-aware, order-independent BPP/CIX matching that understands repeated versus explicit drills and flags reversed routes

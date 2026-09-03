@@ -105,6 +105,7 @@ jobs:
           if (-not (Test-Path $env:INSTALL_EXE)) { throw "Application executable is missing after upgrade" }
           $resources = Join-Path (Split-Path $env:INSTALL_EXE) "resources"
           if (-not (Test-Path (Join-Path $resources "app.asar"))) { throw "Packaged app.asar is missing" }
+          if (-not (Test-Path (Join-Path $resources "biesseworks-bridge.ps1"))) { throw "Packaged BiesseWorks bridge is missing" }
           $smoke = Start-Process $env:INSTALL_EXE -ArgumentList "--smoke-test" -PassThru
           if (-not $smoke.WaitForExit(30000)) { $smoke.Kill(); throw "Installed smoke test timed out" }
           if ($smoke.ExitCode -ne 0) { throw "Installed smoke test exited $($smoke.ExitCode)" }

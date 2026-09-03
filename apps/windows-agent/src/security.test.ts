@@ -51,16 +51,22 @@ describe("Windows Electron security posture", () => {
   });
 
   it("opens BiesseWorks batches by persisted job ID rather than renderer-supplied paths", async () => {
-    const [main, preload, launcher] = await Promise.all([
+    const [main, preload, launcher, bridge, builder] = await Promise.all([
       source("apps/windows-agent/src/main.ts"),
       source("apps/windows-agent/preload.cjs"),
-      source("apps/windows-agent/src/biesseworks.ts")
+      source("apps/windows-agent/src/biesseworks.ts"),
+      source("apps/windows-agent/resources/biesseworks-bridge.ps1"),
+      source("electron-builder.yml")
     ]);
     expect(preload).toContain('openBppInBiesseWorks: jobId => ipcRenderer.invoke("agent:open-bpp-in-biesseworks", jobId)');
     expect(main).toContain('(await store.recentJobs(10_000)).find(record => record.id === jobId)');
     expect(main).toContain('assertAgentSender(event); return openJobOutputsInBiesseWorks(jobId)');
     expect(launcher).toContain('sha256(await read(output.path)) !== output.checksum');
     expect(launcher).toContain('extname(name).toLowerCase() !== ".bpp"');
+    expect(bridge).toContain("Get-FileHash -LiteralPath $output.path -Algorithm SHA256");
+    expect(bridge).toContain('[System.Windows.Forms.SendKeys]::SendWait("^o")');
+    expect(bridge).not.toMatch(/Set-ItemProperty|New-ItemProperty|reg\.exe|reg add/i);
+    expect(builder).toContain("apps/windows-agent/resources/biesseworks-bridge.ps1");
   });
 
   it("opens project folders only after resolving them from the current service inventory", async () => {

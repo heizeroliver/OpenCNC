@@ -120,9 +120,9 @@ If production uses only a local disk, mark this section N/A and explain.
 
 Use known, non-production parts only.
 
-1. Associate `.bpp` with the installed BiesseWorks version, complete a multi-output test conversion, and click **Send to BiesseWorks: …**. Record whether BiesseWorks actually loads every output; Windows accepting the handoff alone is not a pass.
+1. Completely close BiesseWorks, complete a multi-output test conversion, click **Open latest in BiesseWorks: …**, approve the single Windows prompt, and leave the editor untouched. Confirm OpenCNC reaches `N/N` and BiesseWorks actually contains every output.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
-2. Temporarily remove/change the association or copy the outputs to a safe test account without it. Confirm OpenCNC reports the launch failure rather than claiming the files opened.
+2. Close the opened documents but leave BiesseWorks running, then repeat the button. Confirm there is one permission prompt and every output opens again in the existing editor.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
 3. Modify one disposable generated BPP after conversion and click the button. Confirm checksum validation blocks the entire launch batch; then restore/reconvert it.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
@@ -134,7 +134,7 @@ Use known, non-production parts only.
    Result: [ ] PASS [ ] FAIL [ ] N/A — Notes: ____________________
 7. Run BiesseWorks simulation and compare the expected geometry/tooling with a trusted reference export.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
-8. If File Explorer and OpenCNC both start a blank BiesseWorks editor, confirm **Open selected output folder** works and record the vendor-approved manual File → Open/Import procedure.
+8. Cancel one permission prompt and confirm OpenCNC reports failure without changing any CIX/BPP. Then confirm **Open selected output folder** still provides the manual File → Open fallback.
    Result: [ ] PASS [ ] FAIL [ ] N/A — Notes: ____________________
 
 ## J. CNC safety gate

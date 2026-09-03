@@ -12,6 +12,9 @@ files:
   - apps/windows-agent/preload.cjs
   - apps/windows-agent/ui/**/*
   - package.json
+extraResources:
+  - from: apps/windows-agent/resources/biesseworks-bridge.ps1
+    to: biesseworks-bridge.ps1
 win:
   icon: build-resources/icon.ico
   target:
