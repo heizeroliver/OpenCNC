@@ -72,6 +72,7 @@ let snapshot: LocalAgentSnapshot;
 let currentView: "status" | "jobs" | "errors" | "settings" = "status";
 let selectedProjectDirectory: string | undefined;
 let biesseWorksBusy = false;
+let biesseWorksToastTimer: ReturnType<typeof setTimeout> | undefined;
 
 const language = (): AgentLanguage => snapshot?.configuration.language ?? "en";
 const t = (key: TranslationKey): string => translations[language()][key];
@@ -208,6 +209,15 @@ const renderBuildInfo = (value: AgentBuildInfo): void => {
   byId("build-commit").textContent = `Commit ${value.shortCommit}${value.dirty ? " (dirty)" : ""}`;
   byId("build-commit").title = `${value.commit} · ${value.ref}`;
 };
+const showBiesseWorksComplete = (result: BiesseWorksOpenResult): void => {
+  const toast = byId<HTMLElement>("biesseworks-complete-toast");
+  toast.textContent = language() === "hu"
+    ? `${result.openedCount}/${result.outputNames.length} BPP megnyitási művelet befejeződött a BiesseWorksben.`
+    : `${result.openedCount}/${result.outputNames.length} BPP open operations completed in BiesseWorks.`;
+  toast.hidden = false;
+  if (biesseWorksToastTimer) clearTimeout(biesseWorksToastTimer);
+  biesseWorksToastTimer = setTimeout(() => { toast.hidden = true; }, 8_000);
+};
 const openJobInBiesseWorks = async (jobId: string): Promise<void> => {
   const confirmation = byId<HTMLElement>("biesseworks-confirmation");
   biesseWorksBusy = true;
@@ -217,6 +227,7 @@ const openJobInBiesseWorks = async (jobId: string): Promise<void> => {
   try {
     const result = await window.opencncAgent.openBppInBiesseWorks(jobId);
     confirmation.textContent = language() === "hu" ? `${result.openedCount}/${result.outputNames.length} BPP megnyitva a BiesseWorksben (${result.projectName}).` : `${result.openedCount}/${result.outputNames.length} BPP file(s) opened in BiesseWorks (${result.projectName}).`;
+    showBiesseWorksComplete(result);
   } finally {
     biesseWorksBusy = false;
     renderBiesseWorksAction(snapshot.recentJobs);

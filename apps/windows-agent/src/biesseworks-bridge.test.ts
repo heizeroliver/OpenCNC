@@ -12,7 +12,8 @@ describe("BiesseWorks elevated bridge command", () => {
 
     expect(command).toContain("Start-Process");
     expect(command).toContain("-Verb RunAs");
-    expect(command).toContain("-Wait");
+    expect(command).not.toContain("-Wait");
+    expect(command).not.toContain("-PassThru");
     expect(command).toContain("-STA");
     expect(command).toContain("-WindowStyle");
     expect(command).toContain("Hidden");

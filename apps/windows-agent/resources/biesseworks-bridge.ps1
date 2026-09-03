@@ -189,8 +189,11 @@ public static class OpenCncBiesseWindows {
     if (-not [OpenCncBiesseWindows]::SubmitFile($dialog, [string]$output.path)) { throw "OpenCNC could not enter $($output.name) in the BiesseWorks file dialog" }
 
     $loadDeadline = [DateTime]::UtcNow.AddSeconds(60)
-    while ([OpenCncBiesseWindows]::IsWindow($dialog) -and [OpenCncBiesseWindows]::IsWindowVisible($dialog) -and [DateTime]::UtcNow -lt $loadDeadline) { Start-Sleep -Milliseconds 150 }
-    if ([OpenCncBiesseWindows]::IsWindow($dialog) -and [OpenCncBiesseWindows]::IsWindowVisible($dialog)) { throw "BiesseWorks did not finish opening $($output.name) within 60 seconds" }
+    do {
+      Start-Sleep -Milliseconds 150
+      $visibleFileDialog = [OpenCncBiesseWindows]::FindFileDialog($target.Process.Id)
+    } while ($visibleFileDialog -ne [IntPtr]::Zero -and [DateTime]::UtcNow -lt $loadDeadline)
+    if ($visibleFileDialog -ne [IntPtr]::Zero) { throw "BiesseWorks did not finish opening $($output.name) within 60 seconds" }
     $openedCount += 1
     if ($index -lt ($outputs.Count - 1)) { Start-Sleep -Milliseconds $interFileDelayMilliseconds }
   }

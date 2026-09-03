@@ -24,6 +24,8 @@ export interface BiesseWorksBridgeOptions {
   outputs: VerifiedBppOutput[];
   onProgress?(progress: BiesseWorksBridgeProgress): void;
   systemRoot?: string;
+  timeoutMilliseconds?: number;
+  inactivityTimeoutMilliseconds?: number;
 }
 
 const psLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
@@ -40,9 +42,11 @@ export const elevatedBridgeCommand = (powershellPath: string, scriptPath: string
   return [
     "$ErrorActionPreference='Stop'",
     `$bridgeArguments=@(${childArguments.map(psLiteral).join(",")})`,
-    `try{$process=Start-Process -FilePath ${psLiteral(powershellPath)} -ArgumentList $bridgeArguments -Verb RunAs -Wait -PassThru;exit $process.ExitCode}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}`
+    `try{Start-Process -FilePath ${psLiteral(powershellPath)} -ArgumentList $bridgeArguments -Verb RunAs|Out-Null;exit 0}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}`
   ].join(";");
 };
+
+const delay = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 const parseResult = async (path: string): Promise<BridgeResult | undefined> => {
   try {
@@ -72,38 +76,41 @@ export async function runBiesseWorksBridge(options: BiesseWorksBridgeOptions): P
   options.onProgress?.({ state: "waiting_permission", current: 0, total: options.outputs.length });
   const encoded = Buffer.from(elevatedBridgeCommand(powershellPath, options.scriptPath, requestPath, resultPath), "utf16le").toString("base64");
   let lastProgress = "";
-  let polling = false;
-  const poll = async (): Promise<void> => {
-    if (polling) return;
-    polling = true;
-    try {
-      const result = await parseResult(resultPath);
-      if (!result) return;
-      const signature = JSON.stringify(result);
-      if (signature !== lastProgress) {
-        lastProgress = signature;
-        options.onProgress?.({ state: result.state, current: result.current, total: result.total, ...(result.fileName ? { fileName: result.fileName } : {}), ...(result.message ? { message: result.message } : {}) });
-      }
-    } finally { polling = false; }
+  const publish = (result: BridgeResult): boolean => {
+    const signature = JSON.stringify(result);
+    if (signature === lastProgress) return false;
+    lastProgress = signature;
+    options.onProgress?.({ state: result.state, current: result.current, total: result.total, ...(result.fileName ? { fileName: result.fileName } : {}), ...(result.message ? { message: result.message } : {}) });
+    return true;
   };
 
   let stderr = "";
-  const timer = setInterval(() => { void poll(); }, 200);
   try {
-    const exitCode = await new Promise<number>((resolve, reject) => {
+    const launcherExitCode = await new Promise<number>((resolve, reject) => {
       const child = spawn(powershellPath, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", chunk => { stderr += String(chunk); });
       child.once("error", reject);
       child.once("close", code => resolve(code ?? 1));
     });
-    await poll();
-    const result = await parseResult(resultPath);
-    if (!result) throw new Error(exitCode === 0 ? "BiesseWorks bridge did not return a result" : `Administrator permission was cancelled or the BiesseWorks bridge could not start${stderr.trim() ? `: ${stderr.trim()}` : ""}`);
-    if (result.state !== "completed" || exitCode !== 0) throw new Error(result.message || `BiesseWorks bridge exited with code ${exitCode}`);
-    return result.openedCount;
+    if (launcherExitCode !== 0) throw new Error(`Administrator permission was cancelled or the BiesseWorks bridge could not start${stderr.trim() ? `: ${stderr.trim()}` : ""}`);
+
+    const timeout = options.timeoutMilliseconds ?? 120_000 + options.outputs.length * 90_000;
+    const inactivityTimeout = options.inactivityTimeoutMilliseconds ?? 90_000;
+    const deadline = Date.now() + timeout;
+    let lastActivityAt = Date.now();
+    while (Date.now() < deadline) {
+      const result = await parseResult(resultPath);
+      if (result) {
+        if (publish(result)) lastActivityAt = Date.now();
+        if (result.state === "completed") return result.openedCount;
+        if (result.state === "failed") throw new Error(result.message || `BiesseWorks bridge stopped after ${result.openedCount}/${result.total} file(s)`);
+      }
+      if (Date.now() - lastActivityAt >= inactivityTimeout) throw new Error(`BiesseWorks bridge made no progress for ${Math.round(inactivityTimeout / 1000)} seconds`);
+      await delay(200);
+    }
+    throw new Error(`BiesseWorks bridge did not finish within ${Math.round(timeout / 1000)} seconds`);
   } finally {
-    clearInterval(timer);
     await rm(root, { recursive: true, force: true });
   }
 }
