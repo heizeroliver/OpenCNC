@@ -87,8 +87,15 @@ jobs:
           $agent = Start-Process $executable.FullName -ArgumentList "--hidden" -PassThru
           $userData = Join-Path $env:APPDATA "OpenCNC Local Agent"
           $database = Join-Path $userData "opencnc-agent.sqlite"
-          for ($attempt = 0; $attempt -lt 60 -and -not (Test-Path $database); $attempt += 1) { Start-Sleep -Milliseconds 500 }
-          if (-not (Test-Path $database)) { throw "Feature-complete app did not initialize its database at $database" }
+          $databaseReady = $false
+          for ($attempt = 0; $attempt -lt 60 -and -not $databaseReady; $attempt += 1) {
+            if (Test-Path $database) {
+              node scripts/agent-upgrade-fixture.mjs ready $database 2>$null
+              $databaseReady = $LASTEXITCODE -eq 0
+            }
+            if (-not $databaseReady) { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $databaseReady) { throw "Feature-complete app did not finish initializing its database at $database" }
           if (-not $agent.HasExited) { $agent.Kill($true); if (-not $agent.WaitForExit(10000)) { throw "Feature-complete app did not stop" } }
           node scripts/agent-upgrade-fixture.mjs prepare $database
           "preserve me across upgrade and uninstall" | Set-Content (Join-Path $userData "upgrade-sentinel.txt") -Encoding utf8

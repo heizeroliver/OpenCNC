@@ -1,8 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 
 const [mode, databasePath] = process.argv.slice(2);
-if (!mode || !databasePath || !["prepare", "verify"].includes(mode)) {
-  throw new Error("Usage: node scripts/agent-upgrade-fixture.mjs <prepare|verify> <database-path>");
+if (!mode || !databasePath || !["ready", "prepare", "verify"].includes(mode)) {
+  throw new Error("Usage: node scripts/agent-upgrade-fixture.mjs <ready|prepare|verify> <database-path>");
 }
 
 const projectKey = "C:\\OpenCNC Upgrade Fixture\\Interrupted Project";
@@ -10,7 +10,14 @@ const jobId = "upgrade-fixture-interrupted-job";
 const database = new DatabaseSync(databasePath);
 
 try {
-  if (mode === "prepare") {
+  if (mode === "ready") {
+    try {
+      const row = database.prepare("SELECT json FROM configuration WHERE id = 1").get();
+      if (!row || typeof row.json !== "string") process.exitCode = 1;
+    } catch {
+      process.exitCode = 1;
+    }
+  } else if (mode === "prepare") {
     const originalVersion = Number((database.prepare("PRAGMA user_version").get()).user_version);
     if (originalVersion !== 0) throw new Error(`Expected feature-complete schema version 0, received ${originalVersion}`);
     const row = database.prepare("SELECT json FROM configuration WHERE id = 1").get();
