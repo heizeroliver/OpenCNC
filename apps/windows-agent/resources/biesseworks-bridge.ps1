@@ -58,6 +58,7 @@ public static class OpenCncBiesseWindows {
     private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
 
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr parameter);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder value, int maximum);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
@@ -65,8 +66,28 @@ public static class OpenCncBiesseWindows {
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetDlgItem(IntPtr dialog, int identifier);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool SetWindowText(IntPtr window, string value);
-    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageText(IntPtr window, uint message, IntPtr wParam, string text);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessageBuffer(IntPtr window, uint message, IntPtr wParam, StringBuilder text);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")] private static extern IntPtr SendMessageValue(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    private static string ClassName(IntPtr window) {
+        StringBuilder name = new StringBuilder(64);
+        GetClassName(window, name, name.Capacity);
+        return name.ToString();
+    }
+
+    private static IntPtr FindEditDescendant(IntPtr parent) {
+        if (parent == IntPtr.Zero) return IntPtr.Zero;
+        if (ClassName(parent) == "Edit") return parent;
+        IntPtr result = IntPtr.Zero;
+        EnumChildWindows(parent, delegate(IntPtr window, IntPtr parameter) {
+            if (ClassName(window) != "Edit") return true;
+            result = window;
+            return false;
+        }, IntPtr.Zero);
+        return result;
+    }
 
     public static bool Activate(IntPtr window) {
         ShowWindow(window, 9);
@@ -79,9 +100,7 @@ public static class OpenCncBiesseWindows {
             uint owner;
             GetWindowThreadProcessId(window, out owner);
             if (owner != (uint)processId || !IsWindowVisible(window)) return true;
-            StringBuilder name = new StringBuilder(64);
-            GetClassName(window, name, name.Capacity);
-            if (name.ToString() == "#32770") return true;
+            if (ClassName(window) == "#32770") return true;
             result = window;
             return false;
         }, IntPtr.Zero);
@@ -94,9 +113,7 @@ public static class OpenCncBiesseWindows {
             uint owner;
             GetWindowThreadProcessId(window, out owner);
             if (owner != (uint)processId || !IsWindowVisible(window)) return true;
-            StringBuilder name = new StringBuilder(64);
-            GetClassName(window, name, name.Capacity);
-            if (name.ToString() != "#32770" || (GetDlgItem(window, 1148) == IntPtr.Zero && GetDlgItem(window, 1152) == IntPtr.Zero)) return true;
+            if (ClassName(window) != "#32770" || (GetDlgItem(window, 1148) == IntPtr.Zero && GetDlgItem(window, 1152) == IntPtr.Zero)) return true;
             result = window;
             return false;
         }, IntPtr.Zero);
@@ -104,13 +121,19 @@ public static class OpenCncBiesseWindows {
     }
 
     public static bool SubmitFile(IntPtr dialog, string path) {
-        IntPtr fileName = GetDlgItem(dialog, 1148);
-        if (fileName == IntPtr.Zero) fileName = GetDlgItem(dialog, 1152);
+        IntPtr fileNameContainer = GetDlgItem(dialog, 1148);
+        if (fileNameContainer == IntPtr.Zero) fileNameContainer = GetDlgItem(dialog, 1152);
+        IntPtr fileName = FindEditDescendant(fileNameContainer);
+        if (fileName == IntPtr.Zero) fileName = fileNameContainer;
         IntPtr openButton = GetDlgItem(dialog, 1);
         if (fileName == IntPtr.Zero || openButton == IntPtr.Zero) return false;
-        if (!SetWindowText(fileName, path)) return false;
-        SendMessage(openButton, 0x00F5, IntPtr.Zero, IntPtr.Zero);
-        return true;
+        if (SendMessageText(fileName, 0x000C, IntPtr.Zero, path) == IntPtr.Zero) return false;
+        int length = SendMessageValue(fileName, 0x000E, IntPtr.Zero, IntPtr.Zero).ToInt32();
+        StringBuilder current = new StringBuilder(Math.Max(length + 1, path.Length + 1));
+        SendMessageBuffer(fileName, 0x000D, new IntPtr(current.Capacity), current);
+        if (!String.Equals(current.ToString(), path, StringComparison.Ordinal)) return false;
+        Activate(dialog);
+        return PostMessage(openButton, 0x00F5, IntPtr.Zero, IntPtr.Zero);
     }
 }
 '@
