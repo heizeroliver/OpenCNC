@@ -1,4 +1,3 @@
-import "./styles.css";
 import { validateDocument, type OpenCncDocument } from "../../../packages/core/src/index.js";
 import { parseBpp } from "../../../packages/parser-bpp/src/index.js";
 import { parseCix } from "../../../packages/parser-cix/src/index.js";
