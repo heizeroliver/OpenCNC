@@ -9,6 +9,7 @@ import { LocalAgentService, type LocalAgentNotification, type LocalAgentServiceD
 
 const configuration: AgentConfiguration = {
   schemaVersion: "0.1",
+  language: "en",
   automationEnabled: true,
   parentProjectsFolder: "C:\\CNC Projects",
   outputFolder: "BPP",
@@ -18,7 +19,12 @@ const configuration: AgentConfiguration = {
   autoStart: false,
   retryInitialSeconds: 1,
   retryMaximumSeconds: 4,
-  notifyOnSuccess: false
+  notifyOnSuccess: false,
+  projectEnrollment: {
+    parentProjectsFolder: "C:\\CNC Projects",
+    ignoredProjectDirectories: [],
+    initializedAt: new Date(0).toISOString()
+  }
 };
 
 class MemoryStore {
@@ -65,7 +71,21 @@ const dependencies = (overrides: Partial<LocalAgentServiceDependencies> = {}) =>
   let now = 0;
   const notifications: LocalAgentNotification[] = [];
   const timers = new Set<ReturnType<typeof setTimeout>>();
+  const outputSnapshots = new Map<string, { outputDirectory: string; bppCount: number; managed: boolean; outputChecksums: Record<string, string> }>();
+  const { convert: suppliedConvert, inspectOutput: suppliedInspectOutput, ...otherOverrides } = overrides;
   const deps: Partial<LocalAgentServiceDependencies> = {
+    listProjectDirectories: async () => [],
+    inspectOutput: suppliedInspectOutput ?? (async (directory, name, current) => outputSnapshots.get(directory) ?? ({ outputDirectory: `${directory}\\${current.outputFolder.replaceAll("{projectName}", name)}`, bppCount: 0, managed: false, outputChecksums: {} })),
+    ...(suppliedConvert ? { convert: async (value: NodeWorkspaceProject, current: AgentConfiguration) => {
+      const result = await suppliedConvert(value, current);
+      if (result.status === "converted" || result.status === "unchanged") outputSnapshots.set(value.directory, {
+        outputDirectory: result.outputDirectory,
+        bppCount: Object.keys(result.outputChecksums ?? {}).length,
+        managed: true,
+        outputChecksums: result.outputChecksums ?? {}
+      });
+      return result;
+    } } : {}),
     now: () => now,
     createId: () => "job-1",
     setTimer: (callback, delay) => {
@@ -75,18 +95,108 @@ const dependencies = (overrides: Partial<LocalAgentServiceDependencies> = {}) =>
     },
     clearTimer: timer => { clearTimeout(timer); timers.delete(timer); },
     onNotification: notification => { notifications.push(notification); },
-    ...overrides
+    ...otherOverrides
   };
   return {
     deps,
     notifications,
     setNow: (value: number) => { now = value; },
+    deleteOutput: (directory: string) => { outputSnapshots.delete(directory); },
     timerCount: () => timers.size,
     clear: () => { for (const timer of timers) clearTimeout(timer); timers.clear(); }
   };
 };
 
 describe("Windows local agent service", () => {
+  it("recreates deleted verified BPP output without requiring a CIX change", async () => {
+    const store = new MemoryStore();
+    const item = project();
+    let conversions = 0;
+    const harness = dependencies({
+      listProjectDirectories: async () => [item.directory],
+      discover: async () => [item],
+      convert: async value => { conversions += 1; return converted(value); }
+    });
+    const service = new LocalAgentService(store, harness.deps);
+    await service.start();
+    expect(conversions).toBe(1);
+    harness.setNow(10_000);
+    await service.runCycle();
+    expect(conversions).toBe(1);
+
+    harness.deleteOutput(item.directory);
+    harness.setNow(20_000);
+    await service.runCycle();
+    expect(conversions).toBe(2);
+    expect((await store.recentJobs(10))[0]).toMatchObject({ status: "completed", outputNames: ["part.bpp"] });
+    expect((await service.snapshot()).projectFolders).toEqual([expect.objectContaining({ name: "Kitchen", status: "converted", bppCount: 1, outputHealth: "healthy" })]);
+    await service.stop();
+    harness.clear();
+  });
+
+  it("baselines existing folders and converts only projects created afterward", async () => {
+    const store = new MemoryStore();
+    store.configuration = { ...configuration, projectEnrollment: undefined };
+    const existing = project("Existing", "old");
+    const addedLater = project("New project", "new");
+    let directories = [existing.directory];
+    let projects = [existing];
+    const processed: string[] = [];
+    const harness = dependencies({
+      listProjectDirectories: async () => directories,
+      discover: async () => projects,
+      convert: async value => { processed.push(value.name); return converted(value); }
+    });
+    const service = new LocalAgentService(store, harness.deps);
+
+    await service.start();
+    expect(processed).toEqual([]);
+    expect(store.configuration?.projectEnrollment).toMatchObject({
+      parentProjectsFolder: configuration.parentProjectsFolder,
+      ignoredProjectDirectories: [existing.directory]
+    });
+
+    directories = [...directories, addedLater.directory];
+    projects = [...projects, addedLater];
+    harness.setNow(10_000);
+    await service.runCycle();
+    expect(processed).toEqual(["New project"]);
+    expect((await store.recentJobs(10)).map(job => job.projectName)).toEqual(["New project"]);
+
+    await service.stop();
+    const restarted = new LocalAgentService(store, harness.deps);
+    harness.setNow(20_000);
+    await restarted.start();
+    expect(processed).toEqual(["New project"]);
+    expect(store.configuration?.projectEnrollment?.ignoredProjectDirectories).toEqual([existing.directory]);
+    await restarted.stop();
+    harness.clear();
+  });
+
+  it("captures a fresh baseline when the monitored parent folder changes", async () => {
+    const store = new MemoryStore();
+    store.configuration = { ...configuration, projectEnrollment: undefined };
+    const first = project("Existing", "old");
+    const secondParent = "D:\\Polyboard Projects";
+    const secondExisting = { ...project("Already there", "second"), directory: `${secondParent}\\Already there` };
+    const harness = dependencies({
+      listProjectDirectories: async current => current.parentProjectsFolder === secondParent ? [secondExisting.directory] : [first.directory],
+      discover: async current => current.parentProjectsFolder === secondParent ? [secondExisting] : [first],
+      convert: async value => converted(value)
+    });
+    const service = new LocalAgentService(store, harness.deps);
+    await service.start();
+    await service.updateConfiguration({ parentProjectsFolder: secondParent });
+    await service.runCycle();
+    expect(store.configuration?.projectEnrollment).toMatchObject({
+      parentProjectsFolder: secondParent,
+      ignoredProjectDirectories: [secondExisting.directory]
+    });
+    expect(await store.recentJobs(10)).toEqual([]);
+    await service.stop();
+    harness.clear();
+  });
+
   it("persists an unchanged-input retry across restart and records recovery with checksums", async () => {
     const store = new MemoryStore();
     const item = project();

@@ -1,6 +1,6 @@
 # OpenCNC Local Agent for Windows
 
-OpenCNC Local Agent is the unattended, local Windows workflow for folders exported by a CNC/CAD program. It monitors every immediate project folder below one selected parent directory, waits for top-level CIX files to stop changing, and then uses OpenCNC's existing guarded converter to create or update that project's `BPP` directory. Selecting a project in the browser viewer is not required.
+OpenCNC Local Agent is the unattended, local Windows workflow for folders exported by a CNC/CAD program. It recursively maps the directory tree below one selected parent, waits for CIX files to stop changing, and then uses OpenCNC's existing guarded converter to create or update that project's output directory. The default output pattern is `{projectName}_bpp`, so `Kitchen 101` writes to `Kitchen 101_bpp`. Selecting a project in the browser viewer is not required.
 
 The application runs in the Windows notification area (system tray), keeps its settings and retry state across logout/reboot, and includes its own Electron/Node runtime. The target computer does not need Node.js, pnpm, Python, a developer terminal, or this Git repository.
 
@@ -15,6 +15,8 @@ The Windows build is produced by `.github/workflows/windows-agent.yml` on a real
 3. Download the commit-specific `OpenCNC-Windows-Installer-<commit>` artifact and compare the installer with its included `SHA256SUMS.txt`.
 4. Extract it and run `OpenCNC-Local-Agent-Setup.exe`.
 5. Follow the install wizard. It supports a per-user install, a selectable installation directory, Start Menu/Desktop shortcuts, and normal Windows uninstall.
+
+There is no background self-updater yet. To upgrade an existing installation, exit OpenCNC from its tray menu, download and verify the newer artifact, then run the newer installer over the existing installation and choose the same destination. Do not uninstall first. The Windows release workflow tests this in-place path and verifies that the SQLite settings/history and `%APPDATA%\OpenCNC Local Agent` data survive. If an in-place installation fails, back up that data directory, uninstall from Windows Settings, install the new build, and start it again; the uninstaller is configured to retain application data.
 
 Unsigned validation builds may trigger Windows SmartScreen. The workflow accepts protected Authenticode credentials when available and records/verifies the signature state; see [Windows signing readiness](windows-code-signing.md). Do not treat an unsigned RC as a signed production release.
 
@@ -31,15 +33,23 @@ C:\CNC Projects\
     Left_side.cix
 ```
 
-Only top-level `.cix` files in the parent itself or its immediate project directories are candidates. Empty folders, hidden folders, nested grandchildren, and `BPP` output directories are ignored. If `Door_f0.cix` and `Door_f1.cix` form the supported two-sided pair, the canonical converter can merge them into one BPP with the verified operator-reposition wait boundary.
+The first successful scan after choosing a parent (and the first scan after upgrading from RC2) stores every existing nested directory as a baseline. Those earlier directories remain visible as **Existing · not enrolled**, but are not converted automatically. Any directory created afterward is enrolled, including a new directory nested inside an older one. Deleting and recreating an old path after it has disappeared from a scan makes that new directory eligible. Changing the selected parent captures a fresh baseline.
+
+Discovery is recursive: a CIX-bearing project may be any number of levels below the parent. Hidden folders, OpenCNC lock folders, and managed output folders are excluded. Only `.cix` files directly inside each discovered project directory belong to that project. If `Door_f0.cix` and `Door_f1.cix` form the supported two-sided pair, the canonical converter can merge them into one BPP with the verified operator-reposition wait boundary.
+
+CIX inputs are read-only: OpenCNC never renames, overwrites, moves, or deletes them. It reads and checks their size, timestamp, and SHA-256 while writing only to the resolved output subfolder. The editable output pattern may contain the single `{projectName}` placeholder or be a fixed Windows-safe name such as `BPP`.
 
 The agent requires two identical scans by default. The fingerprint contains case-normalized filename, byte size, and modification time. A file is also checked after it is read; if it changed during the read, the attempt fails temporarily and retries instead of converting a partial export.
 
-## Open the converted batch in BiesseWorks
+## Project folder browser and BiesseWorks handoff
 
-Associate `.bpp` files with BiesseWorks in Windows once, the same way used when double-clicking a BPP in File Explorer. After a project completes guarded conversion, the status screen enables **Open in BiesseWorks: …**. One click opens every BPP recorded by the newest completed conversion job; a project containing many CIX exports therefore opens its whole generated BPP batch without selecting files individually.
+The status screen lists every mapped directory with its CIX count, BPP count, and state. Select a row to open the original project folder, open its output folder, or send the latest fully verified BPP batch to Windows. Existing baseline folders remain visible even though they are excluded from automatic conversion.
 
-The renderer sends only the persisted job ID. The Electron main process resolves the recorded output directory and names, requires the job to be completed with forward and reverse verification, rejects path traversal or non-BPP names, confirms every file is regular, and recomputes every SHA-256 before launching anything. If any output is missing or changed, none of the batch is launched. Windows then opens each verified file through its registered `.bpp` application. OpenCNC does not automate BiesseWorks controls, start a simulation, or send a program to a CNC.
+Associate `.bpp` files with BiesseWorks in Windows once, the same way used when double-clicking a BPP in File Explorer. After a project completes guarded conversion, the status screen enables **Send to BiesseWorks: …**. One click sends every BPP recorded by that conversion job to Windows; a project containing many CIX exports therefore sends its whole generated batch without selecting files individually.
+
+The renderer sends only the persisted job ID. The Electron main process resolves the recorded output directory and names, requires the job to be completed with forward and reverse verification, rejects path traversal or non-BPP names, confirms every file is regular, and recomputes every SHA-256 before launching anything. If any output is missing or changed, none of the batch is handed off. Windows then invokes each verified file through its registered `.bpp` handler. OpenCNC does not automate BiesseWorks controls, start a simulation, or send a program to a CNC.
+
+This boundary matters: Electron's documented `shell.openPath` API opens a file in the desktop's default manner and returns an error string only when the operating-system handoff fails. A successful return does not prove that BiesseWorks loaded the document. Windows file associations normally invoke an application's registered `open` command with the quoted document path (`"%1"`). If double-clicking the same BPP in File Explorer starts `Editor.exe` but leaves its editor blank, OpenCNC cannot repair that BiesseWorks/Windows registration safely and shows an output-folder button as the reliable fallback. Use that button, then use the BiesseWorks version's normal **File → Open/Import** workflow. Do not make speculative registry edits without Biesse/vendor instructions. See the [Electron shell documentation](https://www.electronjs.org/docs/latest/api/shell/) and [Microsoft's file-association verb documentation](https://learn.microsoft.com/en-us/windows/win32/shell/fa-verbs).
 
 If Windows reports that no application is associated, right-click a known test `.bpp` in File Explorer, choose **Open with**, select BiesseWorks, and enable the option to always use that application. Convert the project again if the dashboard says its job predates launch tracking.
 
@@ -59,8 +69,9 @@ The tray menu opens the full OpenCNC viewer or Local Agent dashboard, opens the 
 
 The following are stored locally:
 
-- parent projects folder;
-- BPP output folder name;
+- Hungarian/English language choice;
+- parent projects folder and persisted existing-folder baseline;
+- BPP output folder pattern (default `{projectName}_bpp`);
 - polling interval and required stable scans;
 - initial and maximum retry delay;
 - QA PDF generation;
@@ -75,13 +86,15 @@ The auto-start option uses Electron's Windows login-item API and starts the inst
 
 Thrown filesystem failures are temporary. This includes a locked source/output, temporarily denied permission, a disappearing project during a read, and many local/network I/O errors. The unchanged source fingerprint remains retryable. Delay doubles from the configured initial delay to the configured maximum; normal polling continues after recovery.
 
+The agent also checks the names and SHA-256 values of the last verified BPP set on every scan. If the output folder or one generated BPP is deleted, the project becomes eligible again even though no CIX changed, and the guarded converter recreates the missing output. If an output was edited rather than deleted, checksum protection produces a conflict instead of overwriting that edit.
+
 A missing/unavailable parent directory has its own bounded exponential backoff. Notifications are emitted on the first and third consecutive folder failure, then a recovery notification appears when the folder reconnects. Project failures notify on the first and third attempt, avoiding a notification on every poll.
 
 Retry observations are saved to SQLite after every scan. If Windows closes the process while a job is marked `converting`, startup marks that history entry as interrupted/retrying and safely reevaluates it. Each BPP batch is staged in the destination directory and flushed before replacement. The agent rechecks every source and expected existing output before each commit; a mid-batch failure rolls earlier replacements back and removes staging files. Report and manifest files are written last. A per-project atomic directory lock prevents two agent processes from writing the same project; its heartbeat makes a genuinely abandoned lock recoverable after ten minutes.
 
 ## Conflicts and manual BPP protection
 
-Conflicts do not retry until the CIX fingerprint changes or the operator resolves the condition:
+Conflicts do not retry until the CIX/output condition changes or the operator resolves the condition:
 
 - `PartA.cix` and `parta.cix`, or Unicode-equivalent filename forms, are rejected because Windows would treat their destinations as the same name;
 - colliding BPP output names are rejected before any production output is written; and
@@ -120,7 +133,7 @@ Notifications are intentionally limited to conflicts, blocked conversions, first
 
 ## Troubleshooting
 
-- **No project appears:** confirm CIX files are directly inside the selected parent or one immediate child folder. Nested files are intentionally ignored.
+- **No project appears:** confirm the selected parent is reachable and a nested directory contains CIX files directly. Discovery is recursive.
 - **Agent remains in Setup:** choose and save a parent folder.
 - **Agent is Paused:** select **Resume automation** from the tray or enable automation in Settings.
 - **Folder unavailable:** confirm the drive/share is connected and the installed user's account can list/read it. The agent retries automatically.
@@ -128,7 +141,7 @@ Notifications are intentionally limited to conflicts, blocked conversions, first
 - **Conflict:** open Errors/Recent jobs and inspect the message. Check case-only names, Unicode-equivalent names, and manually edited BPP files.
 - **Blocked conversion:** the converter could not prove all guarded round trips. No BPP was written; inspect the conversion report/source and add a verified format fixture before extending conversion support.
 - **BiesseWorks button is disabled:** complete a new verified CIX-to-BPP job with this application version first.
-- **BiesseWorks does not open:** confirm `.bpp` is associated with BiesseWorks for the installed Windows account. The dashboard reports any filenames Windows refused to open.
+- **BiesseWorks starts but the BPP stays closed:** test the same file by double-clicking it in File Explorer. If that also opens a blank editor, use **Open selected output folder** and import/open the files from inside BiesseWorks; this is a vendor/file-association behavior outside OpenCNC's verified interface.
 - **BPP changed after conversion:** OpenCNC blocks the complete launch batch when its current checksum no longer matches the verified job. Review the edit or perform a fresh guarded conversion; the button never weakens overwrite protection.
 - **Machine profile error:** select a valid OpenCNC profile JSON or clear the profile.
 - **No notification:** verify Windows notification permissions. The dashboard and SQLite history remain authoritative.

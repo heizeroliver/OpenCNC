@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,7 +9,9 @@ import {
   atomicWorkspaceBatchWrite,
   atomicWorkspaceWrite,
   convertNodeWorkspaceProject,
-  discoverNodeWorkspaceProjects
+  discoverNodeWorkspaceProjects,
+  listNodeWorkspaceProjectDirectories,
+  resolveOutputFolderPattern
 } from "../../../packages/agent-core/src/node-workspace.js";
 import { sha256Hex } from "../../../packages/workspace/src/index.js";
 
@@ -27,6 +29,23 @@ afterEach(async () => {
 });
 
 describe("local agent filesystem and recovery matrix", () => {
+  it("recursively maps deeply nested projects and excludes managed output folders", async () => {
+    const root = await temporaryRoot("recursive projects");
+    const projectDirectory = join(root, "Customer", "Kitchen", "Cabinet");
+    await mkdir(projectDirectory, { recursive: true });
+    const sourcePath = join(projectDirectory, "panel.cix");
+    await copyFile(fixture, sourcePath);
+
+    const projects = await discoverNodeWorkspaceProjects(root);
+    expect(projects.map(project => project.directory)).toEqual([projectDirectory]);
+    const beforeChecksum = await sha256Hex(await readFile(sourcePath));
+    const result = await convertNodeWorkspaceProject(projects[0]!, { outputFolder: resolveOutputFolderPattern("{projectName}_bpp", projects[0]!.name) });
+    expect(result.outputDirectory).toBe(join(projectDirectory, "Cabinet_bpp"));
+    expect(await sha256Hex(await readFile(sourcePath))).toBe(beforeChecksum);
+    expect(await listNodeWorkspaceProjectDirectories(root)).not.toContain(result.outputDirectory);
+    expect((await discoverNodeWorkspaceProjects(root)).map(project => project.directory)).toEqual([projectDirectory]);
+  });
+
   it("ignores empty projects and converts Unicode files in paths with spaces", async () => {
     const root = await temporaryRoot("árvíztűrő workspace");
     await mkdir(join(root, "Empty project"));
@@ -82,6 +101,24 @@ describe("local agent filesystem and recovery matrix", () => {
     const result = await convertNodeWorkspaceProject(changedProject);
     expect(result).toMatchObject({ status: "conflict", conflicts: ["panel.bpp"] });
     expect(await readFile(outputPath, "utf8")).toContain("MANUAL BIESSE EDIT");
+  });
+
+  it("recreates a deleted managed BPP while leaving the unchanged CIX byte-identical", async () => {
+    const root = await temporaryRoot("deleted output recovery");
+    const projectDirectory = join(root, "Recover output");
+    await mkdir(projectDirectory);
+    const sourcePath = join(projectDirectory, "panel.cix");
+    await copyFile(fixture, sourcePath);
+    const sourceChecksum = await sha256Hex(await readFile(sourcePath));
+    const firstProject = (await discoverNodeWorkspaceProjects(root))[0]!;
+    const first = await convertNodeWorkspaceProject(firstProject, { outputFolder: "Recover output_bpp" });
+    const outputPath = join(first.outputDirectory, "panel.bpp");
+    await unlink(outputPath);
+
+    const recovered = await convertNodeWorkspaceProject((await discoverNodeWorkspaceProjects(root))[0]!, { outputFolder: "Recover output_bpp" });
+    expect(recovered).toMatchObject({ status: "converted", written: 1, verified: true, reverseVerified: true });
+    expect(await stat(outputPath)).toMatchObject({ isFile: expect.any(Function) });
+    expect(await sha256Hex(await readFile(sourcePath))).toBe(sourceChecksum);
   });
 
   it("leaves no temporary sibling after a successful atomic replacement", async () => {

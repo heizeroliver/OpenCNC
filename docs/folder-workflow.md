@@ -17,7 +17,7 @@ Production projects/
     └── BPP/
 ```
 
-Only immediate child folders are treated as projects. If the selected parent itself contains CIX files, it is also presented as one project. Existing `BPP` folders are never scanned as new source projects.
+The browser workflow treats immediate child folders as projects and can also present CIX files in the selected parent. The unattended Node watcher and packaged Windows Local Agent recursively discover nested CIX project directories. Managed output folders are never scanned as new source projects.
 
 An exact `_f0.cix`/`_f1.cix` pair is treated as one two-sided workpiece when its panel setup also matches. The resulting BPP contains f0 machining, the verified BiesseWorks operator-reposition `WAIT`, and then f1 machining. The manifest records both CIX sources against that one BPP, so a change to either face makes the project eligible for reconversion. Ambiguous duplicates and panel mismatches are never guessed into a pair.
 
@@ -45,7 +45,7 @@ Transient project failures such as a temporarily locked file remain retryable ev
 
 Options:
 
-- `--project "Kitchen 42"` watches only one immediate project folder.
+- `--project "Kitchen 42"` watches recursively discovered project folders with that exact leaf name.
 - `--output-folder BPP` changes the output subfolder name.
 - `--qa` generates QA PDF sheets under `BPP/QA`.
 - `--machine-profile machine.json` adds the configured advisory checks.

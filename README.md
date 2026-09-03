@@ -25,10 +25,10 @@ Current verified coverage:
 - Production QA packages with an A4 PDF job sheet, workpiece thumbnail, checks, SHA-256 integrity values, local report QR, simulation approval, and operator sign-off
 - Regression Corpus Lab with local anonymization, parser/renderer/converter/round-trip testing, input mutations, novelty detection, reduced failure fixtures, and previous-run comparison
 - Local IndexedDB project sessions for loaded source files, conversion reports, archive names, operator notes, simulation state, and previous/current comparisons
-- Folder automation that lists CIX project folders under one user-approved parent, refreshes every 10 seconds, and writes verified output into each project's `BPP` subfolder
+- Folder automation that recursively maps project folders under one user-approved parent, refreshes every 10 seconds, and writes verified output into each project's project-named `_bpp` subfolder
 - Automatic, fail-closed `_f0.cix` + `_f1.cix` two-sided pairing into one BPP with the verified BiesseWorks operator-reposition `WAIT` boundary
 - Cross-platform unattended Node watcher with stable-export debouncing, per-project manifests, and checksum-protected updates—no Python runtime required
-- Packaged Windows Local Agent with a tray controller, all-project monitoring, persistent SQLite retry/history state, Windows login startup, notifications, and an NSIS installer with its own runtime
+- Packaged bilingual Hungarian/English Windows Local Agent with a tray controller, new-project enrollment, persistent SQLite retry/history state, Windows login startup, notifications, project-folder browser, and an NSIS installer with its own runtime
 - Conversion Diff Center with field-level source, target, and reverse-conversion values
 - Workpiece dimensions, expanded drill counts, grouped drill lists, and route lengths
 - Tolerance-aware, order-independent BPP/CIX matching that understands repeated versus explicit drills and flags reversed routes
@@ -63,7 +63,7 @@ For a watcher that works without keeping the browser open, double-click **`OpenC
 
 ### Windows Local Agent
 
-Download the commit-specific Windows installer artifact from the intended successful **Windows Local Agent** GitHub Actions run, verify `OpenCNC-Local-Agent-Setup.exe` against its included `SHA256SUMS.txt`, and run it. The installed application does not require Node.js, pnpm, Python, a browser, or a source checkout. On first run, choose the parent directory containing the immediate CIX project folders. The agent waits for stable exports and converts every eligible project into its own `BPP` folder, even when the OpenCNC window is closed. After a verified conversion, **Open in BiesseWorks: …** opens every output from the newest completed project in one click through Windows' registered `.bpp` application.
+Download the commit-specific Windows installer artifact from the intended successful **Windows Local Agent** GitHub Actions run, verify `OpenCNC-Local-Agent-Setup.exe` against its included `SHA256SUMS.txt`, and run it. The installed application does not require Node.js, pnpm, Python, a browser, or a source checkout. On first run, choose the parent directory containing the CIX project tree. That first scan records existing directories as a baseline; only directories created afterward are enrolled for unattended conversion. The agent recursively finds stable CIX exports and writes them into `{projectName}_bpp` by default, even when its window is closed. The dashboard lists all mapped folders and can open a selected project/output folder or ask Windows to hand its verified BPP batch to the registered `.bpp` application.
 
 See the complete [Windows Local Agent guide](docs/windows-local-agent.md) before putting it on a production CNC workstation.
 

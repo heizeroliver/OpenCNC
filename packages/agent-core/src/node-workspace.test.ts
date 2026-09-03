@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { caseInsensitiveNameCollisions, readStableWorkspaceSource, validateOutputFolderName } from "./node-workspace.js";
+import { caseInsensitiveNameCollisions, readStableWorkspaceSource, resolveOutputFolderPattern, validateOutputFolderName } from "./node-workspace.js";
 
 describe("Node workspace safety", () => {
   it("detects Windows case-insensitive and Unicode-normalized collisions", () => {
@@ -30,5 +30,11 @@ describe("Node workspace safety", () => {
     for (const name of ["..", "CON", "con.txt", "PRN", "AUX", "NUL", "COM1", "LPT9", "BPP.", "bad<name", "bad|name", "bad?name", "bad*name"]) {
       expect(() => validateOutputFolderName(name), name).toThrow(/output folder/i);
     }
+  });
+
+  it("resolves the editable project-name output pattern to a safe folder", () => {
+    expect(resolveOutputFolderPattern("{projectName}_bpp", "Konyha felső")).toBe("Konyha felső_bpp");
+    expect(resolveOutputFolderPattern("BPP", "Konyha felső")).toBe("BPP");
+    expect(() => resolveOutputFolderPattern("{unknown}_bpp", "Kitchen")).toThrow(/unsupported placeholder/i);
   });
 });

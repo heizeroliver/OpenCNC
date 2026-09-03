@@ -55,6 +55,8 @@ export const resolveVerifiedBppOutputs = (job: AgentJobHistoryRecord): VerifiedO
   });
 };
 
+export const resolveVerifiedBppOutputDirectory = (job: AgentJobHistoryRecord): string => dirname(resolveVerifiedBppOutputs(job)[0]!.path);
+
 export async function openVerifiedBppOutputs(
   job: AgentJobHistoryRecord,
   open: (path: string) => Promise<string>,
@@ -82,8 +84,8 @@ export async function openVerifiedBppOutputs(
   }));
   const failures = attempts.filter(attempt => attempt.error);
   if (failures.length) {
-    const openedCount = attempts.length - failures.length;
-    throw new Error(`${openedCount}/${attempts.length} BPP file(s) opened. Windows could not open ${failures.map(item => item.output.name).join(", ")}. Associate .bpp files with BiesseWorks and try again.`);
+    const acceptedCount = attempts.length - failures.length;
+    throw new Error(`${acceptedCount}/${attempts.length} BPP file(s) were accepted by Windows. Windows could not hand off ${failures.map(item => item.output.name).join(", ")}. Check the .bpp file association and try again.`);
   }
   return { jobId: job.id, projectName: job.projectName, openedCount: outputs.length, outputNames: outputs.map(output => output.name) };
 }

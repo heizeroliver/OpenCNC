@@ -214,7 +214,7 @@ const openJobOutputsInBiesseWorks = async (jobId: unknown): Promise<BiesseWorksO
   log("info", `Opening verified BPP batch in BiesseWorks: ${job.projectName}`, { jobId: job.id, outputNames: job.outputNames });
   try {
     const result = await openVerifiedBppOutputs(job, path => shell.openPath(path));
-    log("info", `Opened ${result.openedCount} BPP file(s) in BiesseWorks: ${job.projectName}`, { jobId: job.id, outputNames: result.outputNames });
+    log("info", `Sent ${result.openedCount} BPP file(s) to the Windows file handler: ${job.projectName}`, { jobId: job.id, outputNames: result.outputNames });
     return result;
   } catch (error) {
     log("warning", `Could not open BPP batch in BiesseWorks: ${job.projectName}`, { jobId: job.id, error: errorText(error) });
@@ -222,44 +222,59 @@ const openJobOutputsInBiesseWorks = async (jobId: unknown): Promise<BiesseWorksO
   }
 };
 
+const localized = (language: AgentConfiguration["language"], english: string, hungarian: string): string => language === "hu" ? hungarian : english;
+
+const modeLabel = (language: AgentConfiguration["language"], mode: LocalAgentMode): string => {
+  const hungarian: Record<LocalAgentMode, string> = {
+    setup: "beállítás szükséges", running: "fut", paused: "szünetel", processing: "feldolgozás", warning: "figyelmeztetés", error: "hiba", stopped: "leállítva"
+  };
+  return language === "hu" ? hungarian[mode] : mode;
+};
+
+const jobStatusLabel = (language: AgentConfiguration["language"], status: AgentJobHistoryRecord["status"]): string => {
+  if (language === "en") return status.replaceAll("_", " ");
+  return ({ detected: "észlelve", waiting_for_stability: "stabilitásra vár", queued: "sorban áll", converting: "konvertálás", completed: "kész", retrying: "újrapróbálás", blocked: "blokkolva", conflicted: "ütközés", failed: "sikertelen" } as const)[status];
+};
+
 const refreshTray = async (): Promise<void> => {
   if (!tray || !service) return;
   const snapshot = await service.snapshot(8);
   const current = snapshot.state;
+  const language = snapshot.configuration.language;
   tray.setImage(trayIcon(current.mode));
-  tray.setToolTip(`OpenCNC Local Agent — ${current.mode}: ${current.message}`);
+  tray.setToolTip(`OpenCNC Local Agent — ${modeLabel(language, current.mode)}: ${current.message}`);
   tray.setTitle(process.platform === "darwin" ? current.mode === "processing" ? " CNC" : "" : "");
   const recentItems: MenuItemConstructorOptions[] = snapshot.recentJobs.slice(0, 5).map(job => ({
-    label: `${job.projectName}: ${job.status}`,
+    label: `${job.projectName}: ${jobStatusLabel(language, job.status)}`,
     click: () => showAgentWindow("jobs")
   }));
   const template: MenuItemConstructorOptions[] = [
-    { label: `Status: ${current.mode}`, enabled: false },
+    { label: `${localized(language, "Status", "Állapot")}: ${modeLabel(language, current.mode)}`, enabled: false },
     { label: current.message, enabled: false },
     { type: "separator" },
-    { label: "Open OpenCNC", click: openOpenCnc },
-    { label: "Open Local Agent", click: () => showAgentWindow("status") },
-    { label: "Open monitored folder", enabled: Boolean(snapshot.configuration.parentProjectsFolder), click: () => { runBackground("Open monitored folder", openPath(snapshot.configuration.parentProjectsFolder)); } },
-    { label: "Open logs folder", click: () => { runBackground("Open logs folder", openPath(app.getPath("userData"))); } },
+    { label: localized(language, "Open OpenCNC", "OpenCNC megnyitása"), click: openOpenCnc },
+    { label: localized(language, "Open Local Agent", "Helyi ügynök megnyitása"), click: () => showAgentWindow("status") },
+    { label: localized(language, "Open monitored folder", "Figyelt mappa megnyitása"), enabled: Boolean(snapshot.configuration.parentProjectsFolder), click: () => { runBackground("Open monitored folder", openPath(snapshot.configuration.parentProjectsFolder)); } },
+    { label: localized(language, "Open logs folder", "Naplómappa megnyitása"), click: () => { runBackground("Open logs folder", openPath(app.getPath("userData"))); } },
     { type: "separator" },
     {
-      label: snapshot.configuration.automationEnabled ? "Pause automation" : "Resume automation",
+      label: snapshot.configuration.automationEnabled ? localized(language, "Pause automation", "Automatizálás szüneteltetése") : localized(language, "Resume automation", "Automatizálás folytatása"),
       click: () => { runBackground("Change automation state", service!.setAutomationEnabled(!snapshot.configuration.automationEnabled)); }
     },
-    { label: "Convert now", enabled: snapshot.configuration.automationEnabled && Boolean(snapshot.configuration.parentProjectsFolder), click: () => { runBackground("Manual conversion cycle", service!.runCycle()); } },
-    { label: "Change monitored folder…", click: () => { runBackground("Choose monitored folder", chooseParentFolder()); } },
-    { label: "Recent jobs", submenu: recentItems.length ? recentItems : [{ label: "No jobs yet", enabled: false }] },
-    { label: "View all jobs", click: () => showAgentWindow("jobs") },
-    { label: "View errors", click: () => showAgentWindow("errors") },
-    { label: "Settings", click: () => showAgentWindow("settings") },
+    { label: localized(language, "Convert now", "Konvertálás most"), enabled: Boolean(snapshot.configuration.parentProjectsFolder), click: () => { runBackground("Manual conversion cycle", service!.runCycle(true)); } },
+    { label: localized(language, "Change monitored folder…", "Figyelt mappa módosítása…"), click: () => { runBackground("Choose monitored folder", chooseParentFolder()); } },
+    { label: localized(language, "Recent jobs", "Legutóbbi feladatok"), submenu: recentItems.length ? recentItems : [{ label: localized(language, "No jobs yet", "Még nincs feladat"), enabled: false }] },
+    { label: localized(language, "View all jobs", "Összes feladat"), click: () => showAgentWindow("jobs") },
+    { label: localized(language, "View errors", "Hibák megtekintése"), click: () => showAgentWindow("errors") },
+    { label: localized(language, "Settings", "Beállítások"), click: () => showAgentWindow("settings") },
     {
-      label: "Start with Windows",
+      label: localized(language, "Start with Windows", "Indítás a Windowsszal"),
       type: "checkbox",
       checked: snapshot.configuration.autoStart,
       click: item => { runBackground("Change Windows startup setting", updateConfiguration({ autoStart: item.checked })); }
     },
     { type: "separator" },
-    { label: "Exit", click: () => app.quit() }
+    { label: localized(language, "Exit", "Kilépés"), click: () => app.quit() }
   ];
   tray.setContextMenu(Menu.buildFromTemplate(template));
 };
@@ -283,7 +298,8 @@ const updateConfiguration = async (changes: Partial<AgentConfiguration>): Promis
 };
 
 const chooseParentFolder = async (): Promise<string | undefined> => {
-  const options = { title: "Choose the parent CNC projects folder", properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory"> };
+  const language = (await service!.snapshot(1)).configuration.language;
+  const options = { title: localized(language, "Choose the parent CNC projects folder", "Válassza ki a CNC-projektek szülőmappáját"), properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory"> };
   const result = agentWindow ? await dialog.showOpenDialog(agentWindow, options) : await dialog.showOpenDialog(options);
   const selected = result.filePaths[0];
   if (!result.canceled && selected) {
@@ -295,7 +311,8 @@ const chooseParentFolder = async (): Promise<string | undefined> => {
 };
 
 const chooseMachineProfile = async (): Promise<string | undefined> => {
-  const options = { title: "Choose an OpenCNC machine profile", properties: ["openFile"] as Array<"openFile">, filters: [{ name: "JSON machine profile", extensions: ["json"] }] };
+  const language = (await service!.snapshot(1)).configuration.language;
+  const options = { title: localized(language, "Choose an OpenCNC machine profile", "Válasszon OpenCNC gépprofilt"), properties: ["openFile"] as Array<"openFile">, filters: [{ name: "JSON machine profile", extensions: ["json"] }] };
   const result = agentWindow ? await dialog.showOpenDialog(agentWindow, options) : await dialog.showOpenDialog(options);
   return result.canceled ? undefined : result.filePaths[0];
 };
@@ -305,7 +322,7 @@ const assertAgentSender = (event: IpcMainInvokeEvent): void => {
 };
 
 const allowedConfigurationKeys = new Set<keyof AgentConfiguration>([
-  "schemaVersion", "automationEnabled", "parentProjectsFolder", "outputFolder", "scanIntervalSeconds", "stabilityScans",
+  "schemaVersion", "language", "automationEnabled", "parentProjectsFolder", "outputFolder", "scanIntervalSeconds", "stabilityScans",
   "qaEnabled", "machineProfilePath", "autoStart", "retryInitialSeconds", "retryMaximumSeconds", "notifyOnSuccess"
 ]);
 
@@ -327,11 +344,28 @@ const registerIpc = (): void => {
     await service!.setAutomationEnabled(enabled);
     await refreshTray();
   });
-  ipcMain.handle("agent:run-now", async event => { assertAgentSender(event); await service!.runCycle(); return service!.snapshot(100); });
+  ipcMain.handle("agent:run-now", async event => { assertAgentSender(event); await service!.runCycle(true); return service!.snapshot(100); });
   ipcMain.handle("agent:open-bpp-in-biesseworks", (event, jobId: unknown) => { assertAgentSender(event); return openJobOutputsInBiesseWorks(jobId); });
+  ipcMain.handle("agent:open-project-folder", async (event, directory: unknown) => {
+    assertAgentSender(event);
+    const folder = await currentProjectFolder(directory);
+    return openPath(folder.directory);
+  });
+  ipcMain.handle("agent:open-project-output-folder", async (event, directory: unknown) => {
+    assertAgentSender(event);
+    const folder = await currentProjectFolder(directory);
+    return openPath(folder.outputDirectory);
+  });
   ipcMain.handle("agent:open-monitored-folder", async event => { assertAgentSender(event); return openPath((await service!.snapshot(1)).configuration.parentProjectsFolder); });
   ipcMain.handle("agent:open-data-folder", event => { assertAgentSender(event); return openPath(app.getPath("userData")); });
   ipcMain.handle("agent:open-opencnc", event => { assertAgentSender(event); return openOpenCnc(); });
+};
+
+const currentProjectFolder = async (directory: unknown) => {
+  if (typeof directory !== "string" || !directory || directory.length > 32_767) throw new Error("A valid project folder is required");
+  const folder = (await service!.snapshot(10_000)).projectFolders.find(candidate => candidate.directory === directory);
+  if (!folder) throw new Error("The selected project folder is no longer available");
+  return folder;
 };
 
 const logState = (state: LocalAgentState): void => {

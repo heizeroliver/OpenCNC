@@ -62,4 +62,14 @@ describe("Windows Electron security posture", () => {
     expect(launcher).toContain('sha256(await read(output.path)) !== output.checksum');
     expect(launcher).toContain('extname(name).toLowerCase() !== ".bpp"');
   });
+
+  it("opens project folders only after resolving them from the current service inventory", async () => {
+    const [main, preload] = await Promise.all([
+      source("apps/windows-agent/src/main.ts"),
+      source("apps/windows-agent/preload.cjs")
+    ]);
+    expect(preload).toContain('openProjectFolder: directory => ipcRenderer.invoke("agent:open-project-folder", directory)');
+    expect(main).toContain("const folder = await currentProjectFolder(directory)");
+    expect(main).toContain("projectFolders.find(candidate => candidate.directory === directory)");
+  });
 });

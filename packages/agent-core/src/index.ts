@@ -24,8 +24,17 @@ export interface AgentRetryPolicy {
   maximumDelayMs: number;
 }
 
+export type AgentLanguage = "en" | "hu";
+
+export interface AgentProjectEnrollment {
+  parentProjectsFolder: string;
+  ignoredProjectDirectories: string[];
+  initializedAt: string;
+}
+
 export interface AgentConfiguration {
   schemaVersion: "0.1";
+  language: AgentLanguage;
   automationEnabled: boolean;
   parentProjectsFolder: string;
   outputFolder: string;
@@ -37,13 +46,15 @@ export interface AgentConfiguration {
   retryInitialSeconds: number;
   retryMaximumSeconds: number;
   notifyOnSuccess: boolean;
+  projectEnrollment?: AgentProjectEnrollment | undefined;
 }
 
 export const DEFAULT_AGENT_CONFIGURATION: AgentConfiguration = {
   schemaVersion: "0.1",
+  language: "en",
   automationEnabled: true,
   parentProjectsFolder: "",
-  outputFolder: "BPP",
+  outputFolder: "{projectName}_bpp",
   scanIntervalSeconds: 10,
   stabilityScans: 2,
   qaEnabled: false,
@@ -54,29 +65,56 @@ export const DEFAULT_AGENT_CONFIGURATION: AgentConfiguration = {
 };
 
 export const normalizeAgentConfiguration = (value: Partial<AgentConfiguration> | undefined): AgentConfiguration => {
+  const legacyInstalledConfiguration = Boolean(value) && value?.language === undefined;
+  const requestedOutputFolder = value?.outputFolder?.trim();
   const normalized: AgentConfiguration = {
     ...DEFAULT_AGENT_CONFIGURATION,
     ...value,
     schemaVersion: "0.1",
+    language: value?.language === "hu" ? "hu" : "en",
     automationEnabled: value?.automationEnabled ?? DEFAULT_AGENT_CONFIGURATION.automationEnabled,
     parentProjectsFolder: value?.parentProjectsFolder?.trim() ?? "",
-    outputFolder: value?.outputFolder?.trim() || DEFAULT_AGENT_CONFIGURATION.outputFolder
+    outputFolder: !requestedOutputFolder || (legacyInstalledConfiguration && requestedOutputFolder.toLocaleLowerCase() === "bpp")
+      ? DEFAULT_AGENT_CONFIGURATION.outputFolder
+      : requestedOutputFolder
   };
   if (value?.machineProfilePath?.trim()) normalized.machineProfilePath = value.machineProfilePath.trim();
   else delete normalized.machineProfilePath;
+  const enrollment = value?.projectEnrollment;
+  if (
+    enrollment
+    && typeof enrollment.parentProjectsFolder === "string"
+    && Array.isArray(enrollment.ignoredProjectDirectories)
+    && enrollment.ignoredProjectDirectories.every(directory => typeof directory === "string" && directory.length > 0)
+    && typeof enrollment.initializedAt === "string"
+    && !Number.isNaN(Date.parse(enrollment.initializedAt))
+  ) {
+    normalized.projectEnrollment = {
+      parentProjectsFolder: enrollment.parentProjectsFolder,
+      ignoredProjectDirectories: [...new Set(enrollment.ignoredProjectDirectories)],
+      initializedAt: enrollment.initializedAt
+    };
+  } else delete normalized.projectEnrollment;
   return normalized;
 };
 
 export const validateAgentConfiguration = (configuration: AgentConfiguration): string[] => {
   const issues: string[] = [];
   if (configuration.schemaVersion !== "0.1") issues.push("schemaVersion must be 0.1");
-  const reservedOutputDevice = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(configuration.outputFolder);
-  if (!configuration.outputFolder || configuration.outputFolder === "." || configuration.outputFolder === ".." || /[<>:"/\\|?*\u0000-\u001f]/.test(configuration.outputFolder) || /[.]$/.test(configuration.outputFolder) || reservedOutputDevice) issues.push("outputFolder must be one Windows-safe plain folder name");
+  if (configuration.language !== "en" && configuration.language !== "hu") issues.push("language must be en or hu");
+  const sampleOutputFolder = configuration.outputFolder.replaceAll("{projectName}", "Project");
+  const reservedOutputDevice = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(sampleOutputFolder);
+  if (!configuration.outputFolder || /[{}]/.test(sampleOutputFolder) || sampleOutputFolder === "." || sampleOutputFolder === ".." || /[<>:"/\\|?*\u0000-\u001f]/.test(sampleOutputFolder) || /[. ]$/.test(sampleOutputFolder) || reservedOutputDevice) issues.push("outputFolder must be a Windows-safe folder pattern using only the optional {projectName} placeholder");
   if (!Number.isFinite(configuration.scanIntervalSeconds) || configuration.scanIntervalSeconds < 2 || configuration.scanIntervalSeconds > 3_600) issues.push("scanIntervalSeconds must be between 2 and 3600");
   if (!Number.isInteger(configuration.stabilityScans) || configuration.stabilityScans < 1 || configuration.stabilityScans > 100) issues.push("stabilityScans must be an integer between 1 and 100");
   if (!Number.isFinite(configuration.retryInitialSeconds) || configuration.retryInitialSeconds < 1 || configuration.retryInitialSeconds > 3_600) issues.push("retryInitialSeconds must be between 1 and 3600");
   if (!Number.isFinite(configuration.retryMaximumSeconds) || configuration.retryMaximumSeconds < configuration.retryInitialSeconds || configuration.retryMaximumSeconds > 86_400) issues.push("retryMaximumSeconds must be at least retryInitialSeconds and no more than 86400");
   if (configuration.machineProfilePath !== undefined && !configuration.machineProfilePath.trim()) issues.push("machineProfilePath must be omitted or non-empty");
+  if (configuration.projectEnrollment) {
+    if (!configuration.projectEnrollment.parentProjectsFolder) issues.push("projectEnrollment parentProjectsFolder must be non-empty");
+    if (!Array.isArray(configuration.projectEnrollment.ignoredProjectDirectories) || configuration.projectEnrollment.ignoredProjectDirectories.some(directory => !directory)) issues.push("projectEnrollment ignoredProjectDirectories must contain only non-empty paths");
+    if (Number.isNaN(Date.parse(configuration.projectEnrollment.initializedAt))) issues.push("projectEnrollment initializedAt must be an ISO date");
+  }
   return issues;
 };
 

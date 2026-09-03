@@ -55,6 +55,13 @@ export interface NodeWorkspaceProjectResult {
   message: string;
 }
 
+export interface NodeWorkspaceOutputStatus {
+  outputDirectory: string;
+  bppCount: number;
+  managed: boolean;
+  outputChecksums: Record<string, string>;
+}
+
 export interface NodeWorkspaceResult {
   rootDirectory: string;
   projects: NodeWorkspaceProjectResult[];
@@ -83,6 +90,35 @@ export const validateOutputFolderName = (value: string): string => {
   if (!name || name === "." || name === ".." || /[<>:"/\\|?*\u0000-\u001f]/.test(name) || /[.]$/.test(name) || reservedDevice) throw new Error("The output folder must be one Windows-safe plain folder name");
   return name;
 };
+
+export const resolveOutputFolderPattern = (pattern: string, projectName: string): string => {
+  const trimmed = pattern.trim();
+  const resolved = trimmed.replaceAll("{projectName}", projectName);
+  if (/[{}]/.test(resolved)) throw new Error("The output folder pattern contains an unsupported placeholder");
+  return validateOutputFolderName(resolved);
+};
+
+export async function inspectNodeWorkspaceOutput(
+  projectDirectory: string,
+  projectName: string,
+  outputFolderPattern: string
+): Promise<NodeWorkspaceOutputStatus> {
+  const outputDirectory = join(projectDirectory, resolveOutputFolderPattern(outputFolderPattern, projectName));
+  try {
+    const entries = await readdir(outputDirectory, { withFileTypes: true });
+    const bppEntries = entries.filter(entry => entry.isFile() && /\.bpp$/i.test(entry.name)).sort((left, right) => left.name.localeCompare(right.name));
+    const outputChecksums = Object.fromEntries(await Promise.all(bppEntries.map(async entry => [entry.name, await sha256Hex(await readFile(join(outputDirectory, entry.name)))] as const)));
+    return {
+      outputDirectory,
+      bppCount: bppEntries.length,
+      managed: entries.some(entry => entry.isFile() && entry.name === NODE_WORKSPACE_MANIFEST_FILE),
+      outputChecksums
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { outputDirectory, bppCount: 0, managed: false, outputChecksums: {} };
+    throw error;
+  }
+}
 
 export interface CaseInsensitiveCollision {
   normalizedName: string;
@@ -150,22 +186,34 @@ export async function assertWorkspaceSourcesUnchanged(project: NodeWorkspaceProj
 
 export async function discoverNodeWorkspaceProjects(rootDirectory: string, projectFilter?: string): Promise<NodeWorkspaceProject[]> {
   const root = resolve(rootDirectory);
-  const candidates: Array<{ name: string; directory: string }> = [];
+  const candidates: Array<{ name: string; directory: string }> = [{ name: basename(root), directory: root }];
   const rootFiles = await sourceFiles(root);
-  if (rootFiles.length) candidates.push({ name: basename(root), directory: root });
-  const entries = await readdir(root, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name.toLocaleLowerCase() === "bpp") continue;
-    candidates.push({ name: entry.name, directory: join(root, entry.name) });
-  }
+  for (const directory of await listNodeWorkspaceProjectDirectories(root)) candidates.push({ name: basename(directory), directory });
   const projects: NodeWorkspaceProject[] = [];
   for (const candidate of candidates) {
     if (projectFilter && candidate.name.toLocaleLowerCase() !== projectFilter.toLocaleLowerCase()) continue;
-    const files = candidate.directory === root && rootFiles.length ? rootFiles : await sourceFiles(candidate.directory);
+    const files = candidate.directory === root ? rootFiles : await sourceFiles(candidate.directory);
     if (!files.length) continue;
     projects.push({ ...candidate, files, fingerprint: quickWorkspaceFingerprint(files) });
   }
   return projects.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/** Recursively lists project directories without following links or modifying their contents. */
+export async function listNodeWorkspaceProjectDirectories(rootDirectory: string): Promise<string[]> {
+  const root = resolve(rootDirectory);
+  const directories: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    if (directory !== root && entries.some(entry => entry.isFile() && entry.name === NODE_WORKSPACE_MANIFEST_FILE)) return;
+    if (directory !== root) directories.push(directory);
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === NODE_WORKSPACE_LOCK_DIRECTORY) continue;
+      await visit(join(directory, entry.name));
+    }
+  };
+  await visit(root);
+  return directories.sort((left, right) => left.localeCompare(right));
 }
 
 const removeIfPresent = async (path: string): Promise<void> => {

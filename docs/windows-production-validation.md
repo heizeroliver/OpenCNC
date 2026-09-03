@@ -32,6 +32,8 @@ For every step, mark exactly one result and write evidence or a reason for failu
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
 7. Re-run the same/newer installer over the installation. Confirm settings/history remain. Uninstall and confirm program binaries/startup entry disappear while `%APPDATA%\OpenCNC Local Agent` remains available for recovery; then reinstall for the remaining tests.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
+8. Switch the Local Agent to Hungarian, restart it, and confirm the window and tray remain Hungarian. Switch back to English and confirm that choice also persists.
+   Result: [ ] PASS [ ] FAIL — Notes: ____________________
 
 ## B. Startup and single instance
 
@@ -46,17 +48,19 @@ For every step, mark exactly one result and write evidence or a reason for failu
 
 ## C. Real project folder
 
-1. Select the actual parent projects folder. Confirm only that parent and immediate child folders with top-level CIX files are discovered.
+1. Select the actual parent projects folder. Confirm the complete nested folder tree appears and every directory that already existed at selection time is marked as existing/not enrolled.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
-2. Export a known non-production test project containing several top-level CIX files.
+2. Export a known non-production test project into a newly created directory, at least two levels below the parent, containing several CIX files.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
 3. Observe at least one `waiting_for_stability` state before conversion. Confirm no project selection or open browser is required.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
-4. Confirm the project's `BPP` folder contains every expected BPP plus `opencnc-sync-manifest.json` and `opencnc-conversion-report.json`; if QA is enabled, confirm its PDFs.
+4. Confirm the project's `<project-name>_bpp` folder contains every expected BPP plus `opencnc-sync-manifest.json` and `opencnc-conversion-report.json`; if QA is enabled, confirm its PDFs.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
 5. Confirm Recent Jobs shows source/output names, completed status, checksums, and verified forward/reverse results.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
 6. Leave unchanged exports in place for several scan cycles. Confirm no duplicate conversion/job/notification occurs.
+   Result: [ ] PASS [ ] FAIL — Notes: ____________________
+7. Confirm every input CIX retains its original name and byte-for-byte SHA-256, then delete one disposable generated BPP. Without editing any CIX, confirm OpenCNC recreates the missing BPP on a later scan.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
 
 ## D. File locking and retry
@@ -116,7 +120,7 @@ If production uses only a local disk, mark this section N/A and explain.
 
 Use known, non-production parts only.
 
-1. Associate `.bpp` with the installed BiesseWorks version, complete a multi-output test conversion, and click **Open in BiesseWorks: …**. Confirm every output from the newest completed job opens and no unrelated/older BPP opens.
+1. Associate `.bpp` with the installed BiesseWorks version, complete a multi-output test conversion, and click **Send to BiesseWorks: …**. Record whether BiesseWorks actually loads every output; Windows accepting the handoff alone is not a pass.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
 2. Temporarily remove/change the association or copy the outputs to a safe test account without it. Confirm OpenCNC reports the launch failure rather than claiming the files opened.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
@@ -130,6 +134,8 @@ Use known, non-production parts only.
    Result: [ ] PASS [ ] FAIL [ ] N/A — Notes: ____________________
 7. Run BiesseWorks simulation and compare the expected geometry/tooling with a trusted reference export.
    Result: [ ] PASS [ ] FAIL — Notes: ____________________
+8. If File Explorer and OpenCNC both start a blank BiesseWorks editor, confirm **Open selected output folder** works and record the vendor-approved manual File → Open/Import procedure.
+   Result: [ ] PASS [ ] FAIL [ ] N/A — Notes: ____________________
 
 ## J. CNC safety gate
 

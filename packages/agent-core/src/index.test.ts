@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { AgentAttemptController, AgentAutomationCore, exponentialRetryDelay, type AgentCoreProcessResult } from "./index.js";
+import { AgentAttemptController, AgentAutomationCore, exponentialRetryDelay, normalizeAgentConfiguration, validateAgentConfiguration, type AgentCoreProcessResult } from "./index.js";
 
 describe("agent automation core", () => {
+  it("defaults new installs to project-named BPP folders and migrates the RC2 default", () => {
+    expect(normalizeAgentConfiguration(undefined).outputFolder).toBe("{projectName}_bpp");
+    expect(normalizeAgentConfiguration({ outputFolder: "BPP" }).outputFolder).toBe("{projectName}_bpp");
+    expect(normalizeAgentConfiguration({ language: "en", outputFolder: "BPP" }).outputFolder).toBe("BPP");
+    expect(validateAgentConfiguration(normalizeAgentConfiguration({ language: "hu", outputFolder: "{projectName}_bpp" }))).toEqual([]);
+    expect(validateAgentConfiguration(normalizeAgentConfiguration({ language: "hu", outputFolder: "{unknown}_bpp" }))[0]).toContain("optional {projectName}");
+  });
+
   it("retries unchanged transient failures, persists state, and stops after recovery", async () => {
     const project = { name: "Project A", fingerprint: "same", directory: "C:\\Project A" };
     let attempts = 0;

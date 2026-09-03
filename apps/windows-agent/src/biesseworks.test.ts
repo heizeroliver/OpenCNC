@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentJobHistoryRecord } from "../../../packages/agent-core/src/index.js";
-import { openVerifiedBppOutputs, resolveVerifiedBppOutputs } from "./biesseworks.js";
+import { openVerifiedBppOutputs, resolveVerifiedBppOutputDirectory, resolveVerifiedBppOutputs } from "./biesseworks.js";
 
 const roots: string[] = [];
 const checksum = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -42,6 +42,7 @@ describe("BiesseWorks verified batch launcher", () => {
 
     expect(result).toEqual({ jobId: "job-1", projectName: "Kitchen doors", openedCount: 2, outputNames: ["Ajtó 1.bpp", "Ajtó 2.bpp"] });
     expect(opened).toEqual([join(root, "Ajtó 1.bpp"), join(root, "Ajtó 2.bpp")]);
+    expect(resolveVerifiedBppOutputDirectory(job(root, Object.keys(contents), contents))).toBe(root);
   });
 
   it("rejects unsafe or unverified history without opening anything", async () => {
@@ -71,6 +72,6 @@ describe("BiesseWorks verified batch launcher", () => {
     await Promise.all(Object.entries(contents).map(([name, value]) => writeFile(join(root, name), value)));
 
     await expect(openVerifiedBppOutputs(job(root, Object.keys(contents), contents), async path => path.endsWith("two.bpp") ? "No application is associated" : "", { platform: "win32" }))
-      .rejects.toThrow("1/2 BPP file(s) opened");
+      .rejects.toThrow("1/2 BPP file(s) were accepted by Windows");
   });
 });
