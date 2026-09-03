@@ -42,12 +42,14 @@ describe("Windows Electron security posture", () => {
   });
 
   it("loads and packages the production viewer from Vite's actual output directory", async () => {
-    const [main, builder] = await Promise.all([
+    const [main, builder, viewerConfig] = await Promise.all([
       source("apps/windows-agent/src/main.ts"),
-      source("electron-builder.yml")
+      source("electron-builder.yml"),
+      source("apps/viewer/vite.config.ts")
     ]);
     expect(main).toContain('join(appRoot(), "apps", "viewer", "dist", "index.html")');
     expect(builder).toContain("apps/viewer/dist/**/*");
+    expect(viewerConfig).toContain('base: "./"');
   });
 
   it("opens BiesseWorks batches by persisted job ID rather than renderer-supplied paths", async () => {
