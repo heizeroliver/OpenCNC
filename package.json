@@ -1,7 +1,7 @@
 {
   "name": "opencnc",
   "productName": "OpenCNC Local Agent",
-  "version": "1.0.0-rc.6",
+  "version": "1.0.0-rc.7",
   "description": "Offline CIX/BPP conversion and guarded Windows workspace automation",
   "author": "OpenCNC contributors",
   "private": true,

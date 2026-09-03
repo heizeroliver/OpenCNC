@@ -9,6 +9,7 @@ $editorPath = "C:\Biesse\BiesseWorks\Editor\Editor.exe"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $openedCount = 0
 $total = 0
+$interFileDelayMilliseconds = 3000
 
 function Write-BridgeStatus {
   param([string]$State, [int]$Current, [string]$FileName = "", [string]$Message = "")
@@ -61,7 +62,7 @@ public static class OpenCncBiesseWindows {
     [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr parameter);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder value, int maximum);
-    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
@@ -188,10 +189,10 @@ public static class OpenCncBiesseWindows {
     if (-not [OpenCncBiesseWindows]::SubmitFile($dialog, [string]$output.path)) { throw "OpenCNC could not enter $($output.name) in the BiesseWorks file dialog" }
 
     $loadDeadline = [DateTime]::UtcNow.AddSeconds(60)
-    while ([OpenCncBiesseWindows]::IsWindow($dialog) -and [DateTime]::UtcNow -lt $loadDeadline) { Start-Sleep -Milliseconds 150 }
-    if ([OpenCncBiesseWindows]::IsWindow($dialog)) { throw "BiesseWorks did not finish opening $($output.name) within 60 seconds" }
+    while ([OpenCncBiesseWindows]::IsWindow($dialog) -and [OpenCncBiesseWindows]::IsWindowVisible($dialog) -and [DateTime]::UtcNow -lt $loadDeadline) { Start-Sleep -Milliseconds 150 }
+    if ([OpenCncBiesseWindows]::IsWindow($dialog) -and [OpenCncBiesseWindows]::IsWindowVisible($dialog)) { throw "BiesseWorks did not finish opening $($output.name) within 60 seconds" }
     $openedCount += 1
-    Start-Sleep -Milliseconds 500
+    if ($index -lt ($outputs.Count - 1)) { Start-Sleep -Milliseconds $interFileDelayMilliseconds }
   }
 
   Write-BridgeStatus -State "completed" -Current $total -Message "$openedCount BPP file(s) opened in BiesseWorks"
